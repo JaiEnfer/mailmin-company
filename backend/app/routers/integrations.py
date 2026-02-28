@@ -1,0 +1,18 @@
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
+
+from app.core.deps import get_db
+from app.core.security import get_current_user
+from app.integrations.google_oauth import load_credentials_db  # <-- correct name
+
+router = APIRouter(prefix="/integrations", tags=["integrations"])
+
+
+@router.get("/google/status")
+def google_status(
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    workspace_id = int(user["workspace_id"])
+    creds = load_credentials_db(db, workspace_id)
+    return {"connected": bool(creds)}
