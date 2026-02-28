@@ -103,9 +103,18 @@ export default function SettingsPage() {
 
           <Button
             className="rounded-xl"
-            onClick={() => {
-              // redirect user to backend OAuth start
-              window.location.href = `${process.env.NEXT_PUBLIC_API_BASE}/auth/google/start`;
+            onClick={async () => {
+              const token = localStorage.getItem("mm_token");
+              const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE}/auth/google/start`, {
+                headers: token ? { Authorization: `Bearer ${token}` } : {},
+              });
+              if (!res.ok) {
+                const txt = await res.text();
+                alert(txt);
+                return;
+              }
+              const data = await res.json();
+              window.location.href = data.auth_url;
             }}
           >
             Connect Google
