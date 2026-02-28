@@ -52,11 +52,22 @@ export default function LoginPage() {
             <CardContent className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="email">Email</Label>
-                <Input id="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" />
+                <Input
+                  id="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@company.com"
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="password">Password</Label>
-                <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
+                <Input
+                  id="password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                />
               </div>
 
               {err ? <div className="text-sm text-red-600">{err}</div> : null}
@@ -67,7 +78,7 @@ export default function LoginPage() {
 
               <div className="text-center text-xs text-muted-foreground">
                 Don’t have an account?{" "}
-                <Link href="/dashboard" className="underline underline-offset-4">
+                <Link href="/register" className="underline underline-offset-4">
                   Create a workspace
                 </Link>
               </div>

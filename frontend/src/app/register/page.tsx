@@ -7,7 +7,7 @@ import Link from "next/link";
 export default function RegisterPage() {
   const router = useRouter();
 
-  const [alreadyLoggedIn, setAlreadyLoggedIn] = useState(false);
+  const [hasSession, setHasSession] = useState(false);
 
   const [workspaceName, setWorkspaceName] = useState("");
   const [email, setEmail] = useState("");
@@ -18,14 +18,13 @@ export default function RegisterPage() {
 
   useEffect(() => {
     const token = localStorage.getItem("mm_token");
-    setAlreadyLoggedIn(!!token);
+    setHasSession(!!token);
   }, []);
 
-  function logout() {
+  function logoutToLogin() {
     localStorage.removeItem("mm_token");
     localStorage.removeItem("mm_role");
-    // stay on /register after logout
-    window.location.href = "/register";
+    window.location.href = "/login";
   }
 
   async function submit() {
@@ -54,7 +53,7 @@ export default function RegisterPage() {
 
       const data = await res.json();
 
-      // store token + role (consistent with login)
+      // overwrite any existing session with the new workspace/admin user
       localStorage.setItem("mm_token", data.access_token);
       localStorage.setItem("mm_role", data.user?.role || "admin");
 
@@ -66,47 +65,31 @@ export default function RegisterPage() {
     }
   }
 
-  // ✅ Permanent: if already logged in, DO NOT redirect.
-  // Show a clear message and a logout button.
-  if (alreadyLoggedIn) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-6">
-        <div className="w-full max-w-md rounded-2xl border bg-card p-6 shadow-sm space-y-4">
-          <div>
-            <div className="text-2xl font-semibold tracking-tight">Create your workspace</div>
-            <div className="text-sm text-muted-foreground">
-              You’re currently signed in. To create a new company/workspace, log out first.
-            </div>
-          </div>
-
-          <button
-            onClick={logout}
-            className="h-10 w-full rounded-xl bg-primary text-primary-foreground text-sm font-medium"
-          >
-            Log out
-          </button>
-
-          <div className="text-sm text-muted-foreground text-center">
-            Or go to{" "}
-            <Link className="underline underline-offset-4" href="/dashboard/approvals">
-              Dashboard
-            </Link>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Normal register form (not logged in)
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-6">
       <div className="w-full max-w-md rounded-2xl border bg-card p-6 shadow-sm space-y-4">
         <div>
           <div className="text-2xl font-semibold tracking-tight">Create your workspace</div>
           <div className="text-sm text-muted-foreground">
-            Start using MailMind for your company in minutes.
+            Create a company workspace and an admin user.
           </div>
         </div>
+
+        {hasSession ? (
+          <div className="rounded-xl border p-3 text-sm">
+            <div className="font-medium">You’re currently signed in.</div>
+            <div className="text-muted-foreground">
+              Creating a new workspace will switch your session to the new admin account.
+            </div>
+            <button
+              onClick={logoutToLogin}
+              className="mt-3 h-9 w-full rounded-xl border text-sm font-medium"
+              type="button"
+            >
+              Switch account (log out)
+            </button>
+          </div>
+        ) : null}
 
         {err ? <div className="rounded-xl border p-3 text-sm text-red-600">{err}</div> : null}
 
@@ -139,9 +122,7 @@ export default function RegisterPage() {
             onChange={(e) => setPassword(e.target.value)}
             placeholder="Choose a strong password"
           />
-          <div className="text-xs text-muted-foreground">
-            Tip: Use at least 10 characters.
-          </div>
+          <div className="text-xs text-muted-foreground">Tip: Use at least 10 characters.</div>
         </div>
 
         <button
@@ -149,7 +130,7 @@ export default function RegisterPage() {
           disabled={loading}
           className="h-10 w-full rounded-xl bg-primary text-primary-foreground text-sm font-medium disabled:opacity-60"
         >
-          {loading ? "Creating…" : "Create workspace"}
+          {loading ? "Creating…" : "Sign up"}
         </button>
 
         <div className="text-sm text-muted-foreground text-center">
