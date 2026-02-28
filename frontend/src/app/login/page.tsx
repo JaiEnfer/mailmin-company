@@ -68,7 +68,7 @@ export default function LoginPage() {
               <div className="text-center text-xs text-muted-foreground">
                 Don’t have an account?{" "}
                 <Link href="/dashboard" className="underline underline-offset-4">
-                  Preview dashboard
+                  Create a workspace
                 </Link>
               </div>
             </CardContent>
