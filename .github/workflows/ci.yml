@@ -28,6 +28,7 @@ jobs:
 
       - name: Run tests
         env:
+          PYTHONPATH: backend
           DATABASE_URL: "postgresql+psycopg2://postgres:postgres@localhost:5432/postgres"
           GEMINI_API_KEY: "ci_dummy"
           JWT_SECRET: "ci_dummy"
