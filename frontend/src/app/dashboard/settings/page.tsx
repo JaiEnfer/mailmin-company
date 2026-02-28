@@ -77,6 +77,15 @@ export default function SettingsPage() {
     }
   }
 
+  async function loadGoogleStatus() {
+    try {
+      const data = await apiGet("/integrations/google/status");
+      setGoogleConnected(!!data.connected);
+    } catch {
+      setGoogleConnected(false);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-end justify-between gap-3">
