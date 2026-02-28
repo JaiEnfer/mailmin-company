@@ -24,6 +24,9 @@ export default function ApprovalsPage() {
   const [err, setErr] = useState<string | null>(null);
   const [role, setRole] = useState<string>("viewer");
 
+  const [syncLoading, setSyncLoading] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
+
   async function load() {
     setErr(null);
     setLoading(true);
@@ -37,6 +40,39 @@ export default function ApprovalsPage() {
     }
   }
 
+  async function handleSyncUnread() {
+    setErr(null);
+    setSyncMsg(null);
+    setSyncLoading(true);
+
+    try {
+      const unread = await apiGet("/gmail/unread");
+      const emails = unread?.items || [];
+
+      if (emails.length === 0) {
+        setSyncMsg("Fetched 0 unread emails.");
+        return;
+      }
+
+      let queued = 0;
+      for (const m of emails) {
+        try {
+          await apiPost(`/mailmind/queue?message_id=${encodeURIComponent(m.id)}`);
+          queued++;
+        } catch {
+          // ignore individual failures so one bad email doesn't stop the batch
+        }
+      }
+
+      setSyncMsg(`Queued ${queued} email(s) for approval.`);
+      await load(); // refresh approvals list
+    } catch (e: any) {
+      setErr(e?.message || "Sync failed");
+    } finally {
+      setSyncLoading(false);
+    }
+  }
+
   useEffect(() => {
     const r = localStorage.getItem("mm_role") || "viewer";
     setRole(r);
@@ -45,6 +81,7 @@ export default function ApprovalsPage() {
   }, []);
 
   async function approve(id: number) {
+    setErr(null);
     try {
       await apiPost(`/mailmind/approvals/${id}/approve`);
       await load();
@@ -54,6 +91,7 @@ export default function ApprovalsPage() {
   }
 
   async function send(id: number) {
+    setErr(null);
     try {
       await apiPost(`/mailmind/approvals/${id}/send`);
       await load();
@@ -73,13 +111,28 @@ export default function ApprovalsPage() {
             Review what MailMind plans to do before it executes.
           </div>
         </div>
-        <Button variant="secondary" className="rounded-xl" onClick={load}>
-          Refresh
-        </Button>
+
+        <div className="flex gap-2">
+          <Button
+            className="rounded-xl"
+            onClick={handleSyncUnread}
+            disabled={syncLoading}
+          >
+            {syncLoading ? "Syncing..." : "Sync Unread Emails"}
+          </Button>
+
+          <Button variant="secondary" className="rounded-xl" onClick={load}>
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {err ? (
         <div className="rounded-xl border p-3 text-sm text-red-600">{err}</div>
+      ) : null}
+
+      {syncMsg ? (
+        <div className="rounded-xl border p-3 text-sm text-green-700">{syncMsg}</div>
       ) : null}
 
       <Card className="rounded-2xl shadow-sm">
@@ -98,15 +151,21 @@ export default function ApprovalsPage() {
           ) : null}
 
           {!loading && items.length === 0 ? (
-            <div className="text-sm text-muted-foreground">No pending approvals.</div>
+            <div className="text-sm text-muted-foreground">
+              No pending approvals.
+            </div>
           ) : null}
 
           {items.map((a) => (
             <div key={a.id} className="rounded-2xl border p-4">
               <div className="flex flex-col justify-between gap-2 md:flex-row md:items-start">
                 <div className="space-y-1">
-                  <div className="text-sm font-medium">{a.subject || "(No subject)"}</div>
-                  <div className="text-xs text-muted-foreground">{a.from || ""}</div>
+                  <div className="text-sm font-medium">
+                    {a.subject || "(No subject)"}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {a.from || ""}
+                  </div>
                   <div className="mt-2 flex flex-wrap gap-2">
                     <Badge className="rounded-xl" variant="outline">
                       {a.status}
@@ -142,7 +201,9 @@ export default function ApprovalsPage() {
               <Separator className="my-3" />
 
               <div className="text-sm">
-                <div className="text-xs font-medium text-muted-foreground">Draft reply</div>
+                <div className="text-xs font-medium text-muted-foreground">
+                  Draft reply
+                </div>
                 <pre className="mt-2 whitespace-pre-wrap rounded-xl bg-muted/40 p-3 text-sm">
                   {a.draft_reply || ""}
                 </pre>

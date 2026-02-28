@@ -5,6 +5,7 @@ from app.routers.gmail import router as gmail_router
 from app.routers.mailmind import router as mailmind_router
 from app.routers.workspaces import router as workspaces_router
 from app.routers.audit import router as audit_router
+from app.routers.integrations import router as integrations_router
 from app.main import app
 from fastapi.testclient import TestClient
 

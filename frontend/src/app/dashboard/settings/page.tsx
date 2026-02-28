@@ -27,7 +27,7 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
-
+  const [googleConnected, setGoogleConnected] = useState<boolean | null>(null);
   const canEdit = role === "admin";
 
   async function load() {
@@ -45,10 +45,15 @@ export default function SettingsPage() {
   }
 
   useEffect(() => {
-    const r = localStorage.getItem("mm_role") || "viewer";
-    setRole(r);
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const token = localStorage.getItem("mm_token");
+    if (!token) return;
+
+    fetch(`${process.env.NEXT_PUBLIC_API_BASE}/integrations/google/status`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => r.json())
+      .then((data) => setGoogleConnected(data.connected))
+      .catch(() => setGoogleConnected(false));
   }, []);
 
   async function save() {
@@ -91,38 +96,40 @@ export default function SettingsPage() {
 
       <Card className="rounded-2xl shadow-sm">
         <CardHeader>
-          <CardTitle className="flex items-center justify-between">
-            Integrations
-            <Badge variant="secondary" className="rounded-xl">Google</Badge>
-          </CardTitle>
+          <CardTitle>Google Integration</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="text-sm text-muted-foreground">
-            Connect Gmail & Calendar so MailMind can draft replies and schedule meetings.
-          </div>
+        <CardContent className="space-y-4">
+
+          {googleConnected === null && (
+            <div className="text-sm text-muted-foreground">Checking status...</div>
+          )}
+
+          {googleConnected === true && (
+            <div className="text-green-600 font-medium">
+              ✅ Google Connected
+            </div>
+          )}
+
+          {googleConnected === false && (
+            <div className="text-red-500 font-medium">
+              ❌ Not Connected
+            </div>
+          )}
 
           <Button
-            className="rounded-xl"
             onClick={async () => {
               const token = localStorage.getItem("mm_token");
               const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE}/auth/google/start`, {
-                headers: token ? { Authorization: `Bearer ${token}` } : {},
+                headers: { Authorization: `Bearer ${token}` },
               });
-              if (!res.ok) {
-                const txt = await res.text();
-                alert(txt);
-                return;
-              }
               const data = await res.json();
               window.location.href = data.auth_url;
             }}
+            className="rounded-xl"
           >
-            Connect Google
+            {googleConnected ? "Reconnect Google" : "Connect Google"}
           </Button>
 
-          <div className="text-xs text-muted-foreground">
-            You’ll be redirected to Google for consent, then returned to MailMind.
-          </div>
         </CardContent>
       </Card>
 

@@ -51,6 +51,9 @@ def queue_suggestion(
     msg = get_message_metadata(db, workspace_id, message_id)
     msg["snippet"] = redact_pii(msg.get("snippet"))
 
+    if not message_id or message_id.strip() == "":
+        raise HTTPException(status_code=400, detail="Invalid message_id")
+
     classification = classify_email(msg.get("from"), msg.get("subject"), msg.get("snippet"))
 
     # Action analyzer decides what to do (client-flexible)
