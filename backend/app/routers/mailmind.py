@@ -7,7 +7,7 @@ from app.core.security import get_current_user
 from app.core.pii import redact_pii
 from app.core.roles import require_role
 
-from app.integrations.gmail_client import get_message_metadata, send_email
+from app.integrations.gmail_client import get_message_metadata, send_email, list_unread
 from app.integrations.calendar_client import create_event
 
 from app.models import Approval
@@ -16,6 +16,120 @@ from app.services.action_analyzer import analyze_email_for_action
 from app.services.store import create_approval, set_approval_status, log_action
 
 router = APIRouter(prefix="/mailmind", tags=["mailmind"])
+
+
+@router.get("/stats")
+def mailmind_stats(
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Small stats endpoint for the dashboard overview."""
+    workspace_id = int(user["workspace_id"])
+
+    pending = (
+        db.query(Approval)
+        .filter(Approval.workspace_id == workspace_id, Approval.status == "pending")
+        .count()
+    )
+    approved = (
+        db.query(Approval)
+        .filter(Approval.workspace_id == workspace_id, Approval.status == "approved")
+        .count()
+    )
+    sent = (
+        db.query(Approval)
+        .filter(Approval.workspace_id == workspace_id, Approval.status == "sent")
+        .count()
+    )
+
+    return {"pending": pending, "approved": approved, "sent": sent}
+
+
+@router.post("/sync-unread")
+def sync_unread(
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """
+    Fetch unread Gmail messages and create approvals for them.
+    This is the core pipeline companies expect from "Sync".
+    """
+    workspace_id = int(user["workspace_id"])
+
+    unread = list_unread(db=db, workspace_id=workspace_id, max_results=limit)
+    items = unread.get("items", []) or []
+
+    created = 0
+    skipped_existing = 0
+    approval_ids: list[int] = []
+    message_ids: list[str] = []
+
+    for it in items:
+        message_id = it.get("id")
+        if not message_id:
+            continue
+
+        message_ids.append(message_id)
+
+        # Prevent duplicates if user syncs multiple times
+        exists = (
+            db.query(Approval)
+            .filter(Approval.workspace_id == workspace_id, Approval.message_id == message_id)
+            .first()
+        )
+        if exists:
+            skipped_existing += 1
+            continue
+
+        msg = get_message_metadata(db, workspace_id, message_id)
+        msg["snippet"] = redact_pii(msg.get("snippet"))
+
+        classification = classify_email(msg.get("from"), msg.get("subject"), msg.get("snippet"))
+
+        action = analyze_email_for_action(classification, msg)
+        action_type = action.get("action_type") or "none"
+        action_payload = action.get("payload")
+
+        if action_payload:
+            action_payload = json.dumps(action_payload, ensure_ascii=False)
+
+        reply = draft_reply(msg.get("from"), msg.get("subject"), msg.get("snippet"))
+
+        approval = create_approval(
+            db,
+            workspace_id,
+            msg,
+            classification,
+            reply,
+            action_type=action_type,
+            action_payload=action_payload,
+        )
+
+        created += 1
+        approval_ids.append(approval.id)
+
+        log_action(
+            db,
+            "SYNC_QUEUED_APPROVAL",
+            {"approval_id": approval.id, "message_id": message_id, "action_type": approval.action_type},
+            workspace_id=workspace_id,
+        )
+
+    log_action(
+        db,
+        "SYNC_UNREAD",
+        {"fetched": len(items), "created": created, "skipped_existing": skipped_existing},
+        workspace_id=workspace_id,
+    )
+
+    return {
+        "fetched": len(items),
+        "created": created,
+        "skipped_existing": skipped_existing,
+        "approval_ids": approval_ids,
+        "message_ids": message_ids,
+    }
 
 
 @router.get("/suggest-reply")
@@ -48,15 +162,28 @@ def queue_suggestion(
 ):
     workspace_id = int(user["workspace_id"])
 
-    msg = get_message_metadata(db, workspace_id, message_id)
-    msg["snippet"] = redact_pii(msg.get("snippet"))
-
     if not message_id or message_id.strip() == "":
         raise HTTPException(status_code=400, detail="Invalid message_id")
 
+    # Prevent duplicates
+    exists = (
+        db.query(Approval)
+        .filter(Approval.workspace_id == workspace_id, Approval.message_id == message_id)
+        .first()
+    )
+    if exists:
+        return {
+            "approval_id": exists.id,
+            "status": exists.status,
+            "message_id": exists.message_id,
+            "duplicate": True,
+        }
+
+    msg = get_message_metadata(db, workspace_id, message_id)
+    msg["snippet"] = redact_pii(msg.get("snippet"))
+
     classification = classify_email(msg.get("from"), msg.get("subject"), msg.get("snippet"))
 
-    # Action analyzer decides what to do (client-flexible)
     action = analyze_email_for_action(classification, msg)
     action_type = action.get("action_type") or "none"
     action_payload = action.get("payload")
@@ -66,8 +193,6 @@ def queue_suggestion(
 
     reply = draft_reply(msg.get("from"), msg.get("subject"), msg.get("snippet"))
 
-    # NOTE: create_approval signature assumed:
-    # create_approval(db, workspace_id, message, classification, draft_reply, action_type=..., action_payload=...)
     approval = create_approval(
         db,
         workspace_id,
@@ -81,11 +206,7 @@ def queue_suggestion(
     log_action(
         db,
         "QUEUED_APPROVAL",
-        {
-            "approval_id": approval.id,
-            "message_id": message_id,
-            "action_type": approval.action_type,
-        },
+        {"approval_id": approval.id, "message_id": message_id, "action_type": approval.action_type},
         workspace_id=workspace_id,
     )
 
@@ -141,7 +262,6 @@ def approve(
     user: dict = Depends(require_role("admin", "approver")),
 ):
     workspace_id = int(user["workspace_id"])
-
     try:
         a = set_approval_status(db, workspace_id=workspace_id, approval_id=approval_id, status="approved")
         log_action(db, "APPROVED", {"approval_id": approval_id}, workspace_id=workspace_id)
@@ -157,7 +277,6 @@ def reject(
     user: dict = Depends(require_role("admin", "approver")),
 ):
     workspace_id = int(user["workspace_id"])
-
     try:
         a = set_approval_status(db, workspace_id=workspace_id, approval_id=approval_id, status="rejected")
         log_action(db, "REJECTED", {"approval_id": approval_id}, workspace_id=workspace_id)
@@ -198,7 +317,6 @@ def send_approved(
     extra_note = ""
     event = None
 
-    # Execute task action if present
     if a.action_type == "calendar_create" and a.action_payload:
         try:
             payload = json.loads(a.action_payload)
@@ -216,7 +334,6 @@ def send_approved(
             description=payload.get("description", ""),
         )
 
-        # Store event link back into payload (optional but useful)
         try:
             payload["event_link"] = event.get("htmlLink")
             a.action_payload = json.dumps(payload, ensure_ascii=False)
