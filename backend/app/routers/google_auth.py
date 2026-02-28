@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
+import os
 
 from app.core.deps import get_db
 from app.core.security import get_current_user
@@ -9,20 +10,31 @@ from app.services.store import log_action
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+# IMPORTANT: Set this in Render to your Vercel domain, e.g. https://mailmind.vercel.app
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+
 
 @router.get("/google/start")
 def google_start(
+    request: Request,
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
+    """
+    Starts Google OAuth. We store workspace_id in OAuth state.
+    Optional: ?next=/dashboard/settings to decide where frontend should land after callback.
+    """
     workspace_id = int(user["workspace_id"])
+    next_path = request.query_params.get("next", "/dashboard/settings")
 
     flow = build_flow()
     auth_url, _ = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
-        state=str(workspace_id),  # <— important: send workspace via OAuth state
+        # We pack workspace_id + next_path into state.
+        # Format: "<workspace_id>|<next_path>"
+        state=f"{workspace_id}|{next_path}",
     )
     return {"auth_url": auth_url}
 
@@ -32,22 +44,54 @@ def google_callback(
     request: Request,
     db: Session = Depends(get_db),
 ):
+    """
+    Receives Google OAuth callback, saves credentials for the workspace,
+    then redirects user back to frontend (never returns JSON).
+    """
     code = request.query_params.get("code")
-    state = request.query_params.get("state")  # this is our workspace_id
+    state = request.query_params.get("state")  # "<workspace_id>|<next_path>"
 
     if not code or not state:
         raise HTTPException(status_code=400, detail="Missing code/state")
 
+    # Parse state
     try:
-        workspace_id = int(state)
-    except ValueError:
+        if "|" in state:
+            ws_part, next_path = state.split("|", 1)
+        else:
+            ws_part, next_path = state, "/dashboard/settings"
+
+        workspace_id = int(ws_part)
+        if not next_path.startswith("/"):
+            next_path = "/dashboard/settings"
+    except Exception:
         raise HTTPException(status_code=400, detail="Invalid state")
 
-    flow = build_flow()
+    # Complete OAuth
+    flow = build_flow(state=state)
     flow.fetch_token(code=code)
 
     creds = flow.credentials
     save_credentials_db(db, workspace_id, creds)
 
-    # redirect back to frontend (optional)
-    return {"status": "ok", "message": "Google connected. Tokens saved."}
+    # Audit log
+    try:
+        log_action(
+            db,
+            "GOOGLE_CONNECTED",
+            {"workspace_id": workspace_id},
+            workspace_id=workspace_id,
+        )
+    except Exception:
+        # Don't block redirect if audit logging fails
+        pass
+
+    # Redirect back to frontend with a flag so UI can show "Connected ✅"
+    redirect_url = f"{FRONTEND_URL}{next_path}"
+    if "?" in redirect_url:
+        redirect_url += "&google=connected"
+    else:
+        redirect_url += "?google=connected"
+
+    # 303 is better for OAuth callback redirect
+    return RedirectResponse(url=redirect_url, status_code=303)
