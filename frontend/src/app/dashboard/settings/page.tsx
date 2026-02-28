@@ -92,6 +92,35 @@ export default function SettingsPage() {
       <Card className="rounded-2xl shadow-sm">
         <CardHeader>
           <CardTitle className="flex items-center justify-between">
+            Integrations
+            <Badge variant="secondary" className="rounded-xl">Google</Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="text-sm text-muted-foreground">
+            Connect Gmail & Calendar so MailMind can draft replies and schedule meetings.
+          </div>
+
+          <Button
+            className="rounded-xl"
+            onClick={() => {
+              // redirect user to backend OAuth start
+              window.location.href = `${process.env.NEXT_PUBLIC_API_BASE}/auth/google/start`;
+            }}
+          >
+            Connect Google
+          </Button>
+
+          <div className="text-xs text-muted-foreground">
+            You’ll be redirected to Google for consent, then returned to MailMind.
+          </div>
+        </CardContent>
+      </Card>
+
+
+      <Card className="rounded-2xl shadow-sm">
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
             Workspace configuration
             <Button variant="secondary" className="rounded-xl" onClick={load}>
               Refresh
