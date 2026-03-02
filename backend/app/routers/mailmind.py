@@ -58,7 +58,15 @@ def sync_unread(
     workspace_id = int(user["workspace_id"])
 
     unread = list_unread(db=db, workspace_id=workspace_id, max_results=limit)
-    items = unread.get("items", []) or []
+
+    # list_unread() might return either:
+    # 1) {"items": [...]}  OR  2) [...]
+    if isinstance(unread, dict):
+        items = unread.get("items", []) or []
+    elif isinstance(unread, list):
+        items = unread
+    else:
+        items = []
 
     created = 0
     skipped_existing = 0
