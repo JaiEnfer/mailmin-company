@@ -13,8 +13,10 @@ from app.models import GoogleToken
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
-    "https://www.googleapis.com/auth/calendar.events"
-]
+    "https://www.googleapis.com/auth/calendar.events",
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+    ]
 
 def build_flow(state: Optional[str] = None) -> Flow:
     if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:

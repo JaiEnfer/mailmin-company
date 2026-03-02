@@ -48,6 +48,7 @@ class Workspace(Base):
     default_meeting_duration_minutes = Column(Integer, default=30)
     company_tone = Column(Text, default="Professional and concise.")
     auto_execute_actions = Column(Boolean, default=False)
+    google_email = Column(String(255), nullable=True)  # For sending emails if needed
 
 class GoogleToken(Base):
     __tablename__ = "google_tokens"

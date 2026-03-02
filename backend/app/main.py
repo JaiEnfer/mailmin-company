@@ -10,6 +10,8 @@ from app.routers.auth import router as auth_router
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers.admin import router as admin_router
 from app.routers.integrations import router as integrations_router
+
+
 app = FastAPI(title="MailMind API", version="0.1.0")
 
 app.include_router(google_auth_router)

@@ -2,11 +2,16 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 import os
+import requests
 
 from app.core.deps import get_db
 from app.core.security import get_current_user
 from app.integrations.google_oauth import build_flow, save_credentials_db
 from app.services.store import log_action
+
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from app.models import Workspace
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -73,6 +78,48 @@ def google_callback(
 
     creds = flow.credentials
     save_credentials_db(db, workspace_id, creds)
+
+    try:
+        # userinfo endpoint (requires openid + userinfo.email)
+        headers = {"Authorization": f"Bearer {creds.token}"}
+        r = requests.get("https://www.googleapis.com/oauth2/v2/userinfo", headers=headers, timeout=10)
+        if r.ok:
+            me = r.json()
+            email = me.get("email")
+            if email:
+                ws = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+                if ws:
+                    ws.google_email = email
+                    db.commit()
+                log_action(db, "GOOGLE_CONNECTED", {"email": email}, workspace_id=workspace_id)
+    except Exception:
+        pass
+
+        # Fetch connected Google account email and store in workspace.google_email
+    try:
+        c = Credentials(
+            token=creds.token,
+            refresh_token=getattr(creds, "refresh_token", None),
+            token_uri=creds.token_uri,
+            client_id=creds.client_id,
+            client_secret=creds.client_secret,
+            scopes=creds.scopes,
+        )
+
+        oauth2 = build("oauth2", "v2", credentials=c)
+        me = oauth2.userinfo().get().execute()
+        email = me.get("email")
+
+        if email:
+            ws = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+            if ws:
+                ws.google_email = email
+                db.commit()
+
+        log_action(db, "GOOGLE_CONNECTED", {"email": email}, workspace_id=workspace_id)
+    except Exception:
+        # Don't block OAuth flow if userinfo fails
+        pass
 
     # Audit log
     try:

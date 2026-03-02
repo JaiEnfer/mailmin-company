@@ -24,7 +24,7 @@ def list_unread(db: Session, workspace_id: int, max_results: int = 10) -> List[D
 
     resp = service.users().messages().list(
         userId="me",
-        q="is:unread",
+        q="is:unread:inbox",
         maxResults=max_results,
     ).execute()
 
