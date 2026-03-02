@@ -51,10 +51,7 @@ def sync_unread(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """
-    Fetch unread Gmail messages and create approvals for them.
-    This is the core pipeline companies expect from "Sync".
-    """
+    
     workspace_id = int(user["workspace_id"])
 
     unread = list_unread(db=db, workspace_id=workspace_id, max_results=limit)
@@ -74,13 +71,17 @@ def sync_unread(
     message_ids: list[str] = []
 
     for it in items:
-        message_id = it.get("id")
+        if isinstance(it, str):
+            message_id = it
+        else:
+            message_id = (it or {}).get("id")
+
         if not message_id:
             continue
 
         message_ids.append(message_id)
 
-        # Prevent duplicates if user syncs multiple times
+        
         exists = (
             db.query(Approval)
             .filter(Approval.workspace_id == workspace_id, Approval.message_id == message_id)
