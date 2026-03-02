@@ -295,11 +295,15 @@ def reject(
 
 
 @router.post("/approvals/{approval_id}/send")
-def send_approved(
+def execute_action(
     approval_id: int,
     db: Session = Depends(get_db),
     user: dict = Depends(require_role("admin", "approver")),
 ):
+    """
+    Execute the approved action ONLY (no email send).
+    Keeps original email unread because we do not modify labels.
+    """
     workspace_id = int(user["workspace_id"])
 
     a = (
@@ -310,20 +314,11 @@ def send_approved(
     if not a:
         raise HTTPException(status_code=404, detail="Approval not found")
     if a.status != "approved":
-        raise HTTPException(status_code=400, detail=f"Approval status must be 'approved' (current: {a.status})")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Approval status must be 'approved' (current: {a.status})",
+        )
 
-    # Extract email inside <> if present
-    to_raw = a.from_email or ""
-    to_email = to_raw
-    if "<" in to_raw and ">" in to_raw:
-        to_email = to_raw.split("<", 1)[1].split(">", 1)[0].strip()
-
-    # Prefix subject with Re:
-    subject = a.subject or ""
-    if subject and not subject.lower().startswith("re:"):
-        subject = f"Re: {subject}"
-
-    extra_note = ""
     event = None
 
     if a.action_type == "calendar_create" and a.action_payload:
@@ -343,20 +338,81 @@ def send_approved(
             description=payload.get("description", ""),
         )
 
+        # store event link back into payload
         try:
             payload["event_link"] = event.get("htmlLink")
             a.action_payload = json.dumps(payload, ensure_ascii=False)
         except Exception:
             pass
 
-        extra_note = f"\n\nCalendar event created: {event.get('htmlLink')}\n"
-
+        
         log_action(
             db,
             "CALENDAR_EVENT_CREATED",
             {"approval_id": a.id, "event": event},
             workspace_id=workspace_id,
         )
+
+    # Mark as executed even if there was no action (keeps flow consistent)
+    a.status = "executed"
+    db.commit()
+    db.refresh(a)
+
+    log_action(
+        db,
+        "EXECUTED_ACTION",
+        {"approval_id": a.id, "action_type": a.action_type, "event": event},
+        workspace_id=workspace_id,
+    )
+
+    return {"id": a.id, "status": a.status, "executed": {"action_type": a.action_type, "event": event}}
+
+@router.post("/approvals/{approval_id}/reply")
+def send_reply(
+    approval_id: int,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("admin", "approver")),
+):
+    """
+    Send the draft reply ONLY (no task execution).
+    Keeps original email unread because we do not modify labels.
+    """
+    workspace_id = int(user["workspace_id"])
+
+    a = (
+        db.query(Approval)
+        .filter(Approval.id == approval_id, Approval.workspace_id == workspace_id)
+        .first()
+    )
+    if not a:
+        raise HTTPException(status_code=404, detail="Approval not found")
+
+    # allow replying when approved OR executed
+    if a.status not in ("approved", "executed"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Approval status must be 'approved' or 'executed' (current: {a.status})",
+        )
+
+    # Extract email inside <> if present
+    to_raw = a.from_email or ""
+    to_email = to_raw
+    if "<" in to_raw and ">" in to_raw:
+        to_email = to_raw.split("<", 1)[1].split(">", 1)[0].strip()
+
+    subject = a.subject or ""
+    if subject and not subject.lower().startswith("re:"):
+        subject = f"Re: {subject}"
+
+    extra_note = ""
+    if a.action_payload:
+        try:
+            payload = json.loads(a.action_payload)
+            link = payload.get("event_link")
+            if link:
+                extra_note = f"\n\nCalendar event created: {link}\n"
+        except Exception:
+            pass
 
     body = (a.draft_reply or "") + extra_note
     sent = send_email(db=db, workspace_id=workspace_id, to_email=to_email, subject=subject, body=body)
@@ -370,7 +426,7 @@ def send_approved(
     log_action(
         db,
         "SENT_EMAIL",
-        {"approval_id": approval_id, "to": to_email, "sent": sent, "action_type": a.action_type},
+        {"approval_id": approval_id, "to": to_email, "sent": sent},
         workspace_id=workspace_id,
     )
 
