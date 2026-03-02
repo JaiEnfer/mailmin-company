@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 from email.message import EmailMessage
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from googleapiclient.discovery import build
 from sqlalchemy.orm import Session
@@ -19,25 +19,51 @@ def get_gmail_service(db: Session, workspace_id: int):
     return build("gmail", "v1", credentials=creds)
 
 
-def list_unread(db: Session, workspace_id: int, max_results: int = 10) -> List[Dict[str, Any]]:
+def list_unread(
+    db: Session,
+    workspace_id: int,
+    max_results: int = 10,
+    q: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Returns unread messages metadata.
+    Default is "is:unread" (across all inbox tabs), because many emails land in Promotions/Updates.
+    You can pass q="is:unread in:inbox" if you want inbox-only behavior.
+    """
     service = get_gmail_service(db, workspace_id)
 
-    resp = service.users().messages().list(
-        userId="me",
-        q="is:unread in:inbox",
-        maxResults=max_results,
-    ).execute()
+    query = (q or "is:unread").strip()
 
-    messages = resp.get("messages", [])
+    resp = (
+        service.users()
+        .messages()
+        .list(
+            userId="me",
+            q=query,
+            maxResults=max_results,
+        )
+        .execute()
+    )
+
+    messages = resp.get("messages", []) or []
     results: List[Dict[str, Any]] = []
 
     for m in messages:
-        msg = service.users().messages().get(
-            userId="me",
-            id=m["id"],
-            format="metadata",
-            metadataHeaders=["From", "To", "Subject", "Date"],
-        ).execute()
+        msg_id = m.get("id")
+        if not msg_id:
+            continue
+
+        msg = (
+            service.users()
+            .messages()
+            .get(
+                userId="me",
+                id=msg_id,
+                format="metadata",
+                metadataHeaders=["From", "To", "Subject", "Date"],
+            )
+            .execute()
+        )
 
         headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
         results.append(

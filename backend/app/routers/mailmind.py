@@ -54,7 +54,7 @@ def sync_unread(
     
     workspace_id = int(user["workspace_id"])
 
-    unread = list_unread(db=db, workspace_id=workspace_id, max_results=limit)
+    unread = list_unread(db=db, workspace_id=workspace_id, max_results=limit, q="is:unread")
 
     # list_unread() might return either:
     # 1) {"items": [...]}  OR  2) [...]
