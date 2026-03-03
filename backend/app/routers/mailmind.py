@@ -8,7 +8,7 @@ from app.core.pii import redact_pii
 from app.core.roles import require_role
 
 from app.integrations.gmail_client import get_message_metadata, send_email, list_unread, ensure_unread
-from app.integrations.calendar_client import create_event
+from app.integrations.calendar_client import create_event, is_time_free
 
 from app.models import Approval
 from app.services.llm import classify_email, draft_reply
