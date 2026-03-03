@@ -416,7 +416,15 @@ def send_reply(
     
 
     body = (a.draft_reply or "") + extra_note
-    sent = send_email(db=db, workspace_id=workspace_id, to_email=to_email, subject=subject, body=body)
+    sent = send_email(
+        db=db,
+        workspace_id=workspace_id,
+        to_email=to_email,
+        subject=subject,
+        body=body,
+        thread_id=a.thread_id,
+        reply_to_message_id=a.message_id,
+    )
 
     a.status = "sent"
     a.sent_message_id = sent.get("id")

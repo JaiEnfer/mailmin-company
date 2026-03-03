@@ -99,8 +99,31 @@ def get_message_metadata(db: Session, workspace_id: int, message_id: str) -> Dic
         "snippet": msg.get("snippet"),
     }
 
+def get_message_reply_headers(db: Session, workspace_id: int, message_id: str) -> Dict[str, str]:
+    """
+    Fetch RFC headers required for proper threading: Message-ID / References / In-Reply-To.
+    """
+    service = get_gmail_service(db, workspace_id)
+    msg = service.users().messages().get(
+        userId="me",
+        id=message_id,
+        format="metadata",
+        metadataHeaders=["Message-ID", "References", "In-Reply-To"],
+    ).execute()
 
-def send_email(db: Session, workspace_id: int, to_email: str, subject: str, body: str) -> dict:
+    headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
+    return headers
+
+
+def send_email(
+    db: Session,
+    workspace_id: int,
+    to_email: str,
+    subject: str,
+    body: str,
+    thread_id: Optional[str] = None,
+    reply_to_message_id: Optional[str] = None,
+) -> dict:
     service = get_gmail_service(db, workspace_id)
 
     msg = EmailMessage()
@@ -108,15 +131,28 @@ def send_email(db: Session, workspace_id: int, to_email: str, subject: str, body
     msg["Subject"] = subject
     msg.set_content(body)
 
+    # Threading headers for replies (more reliable than threadId alone)
+    if reply_to_message_id:
+        h = get_message_reply_headers(db, workspace_id, reply_to_message_id)
+        orig_msgid = h.get("Message-ID")
+        if orig_msgid:
+            msg["In-Reply-To"] = orig_msgid
+            refs = h.get("References")
+            msg["References"] = (refs + " " + orig_msgid).strip() if refs else orig_msgid
+
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
+
+    payload: Dict[str, Any] = {"raw": raw}
+    if thread_id:
+        payload["threadId"] = thread_id  # ✅ reply in same chain
 
     sent = service.users().messages().send(
         userId="me",
-        body={"raw": raw},
+        body=payload,
     ).execute()
 
     return {"id": sent.get("id"), "threadId": sent.get("threadId")}
-
+    
 def ensure_unread(db: Session, workspace_id: int, message_id: str) -> None:
     """
     Force the original email to remain unread by re-adding the UNREAD label.
