@@ -100,18 +100,20 @@ def get_message_metadata(db: Session, workspace_id: int, message_id: str) -> Dic
     }
 
 def get_message_reply_headers(db: Session, workspace_id: int, message_id: str) -> Dict[str, str]:
-    """
-    Fetch RFC headers required for proper threading: Message-ID / References / In-Reply-To.
-    """
     service = get_gmail_service(db, workspace_id)
     msg = service.users().messages().get(
         userId="me",
         id=message_id,
         format="metadata",
-        metadataHeaders=["Message-ID", "References", "In-Reply-To"],
+        metadataHeaders=["Message-ID", "Message-Id", "References", "In-Reply-To"],
     ).execute()
 
-    headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
+    headers = {}
+    for h in msg.get("payload", {}).get("headers", []) or []:
+        name = (h.get("name") or "").strip().lower()
+        val = (h.get("value") or "").strip()
+        if name and val:
+            headers[name] = val
     return headers
 
 
@@ -134,7 +136,7 @@ def send_email(
     # Threading headers for replies (more reliable than threadId alone)
     if reply_to_message_id:
         h = get_message_reply_headers(db, workspace_id, reply_to_message_id)
-        orig_msgid = h.get("Message-ID")
+        orig_msgid = h.get("message-id")
         if orig_msgid:
             msg["In-Reply-To"] = orig_msgid
             refs = h.get("References")
