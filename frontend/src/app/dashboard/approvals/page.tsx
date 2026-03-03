@@ -121,6 +121,16 @@ export default function ApprovalsPage() {
     }
   }
 
+  async function noReply(id: number) {
+    setErr(null);
+    try {
+      await apiPost(`/mailmind/approvals/${id}/no-reply`);
+      await load();
+    } catch (e: any) {
+      setErr(e?.message || "No-reply failed");
+    }
+  }
+
   const canAct = role === "admin" || role === "approver";
 
   if (!mounted) {
@@ -255,6 +265,12 @@ export default function ApprovalsPage() {
                           Send Reply
                         </Button>
                       ) : null}
+
+                      {showReply ? (
+                        <Button className="rounded-xl" variant="secondary" onClick={() => noReply(a.id)}>
+                          Don’t reply
+                        </Button>
+                        ): null  }
 
                       {!showApprove && !showExecute && !showReply ? (
                         <Badge variant="secondary" className="rounded-xl">

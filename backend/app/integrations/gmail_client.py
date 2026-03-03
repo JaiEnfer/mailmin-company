@@ -116,3 +116,15 @@ def send_email(db: Session, workspace_id: int, to_email: str, subject: str, body
     ).execute()
 
     return {"id": sent.get("id"), "threadId": sent.get("threadId")}
+
+def ensure_unread(db: Session, workspace_id: int, message_id: str) -> None:
+    """
+    Force the original email to remain unread by re-adding the UNREAD label.
+    Requires gmail.modify scope.
+    """
+    service = get_gmail_service(db, workspace_id)
+    service.users().messages().modify(
+        userId="me",
+        id=message_id,
+        body={"addLabelIds": ["UNREAD"]},
+    ).execute()

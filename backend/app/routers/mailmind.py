@@ -7,7 +7,7 @@ from app.core.security import get_current_user
 from app.core.pii import redact_pii
 from app.core.roles import require_role
 
-from app.integrations.gmail_client import get_message_metadata, send_email, list_unread
+from app.integrations.gmail_client import get_message_metadata, send_email, list_unread, ensure_unread
 from app.integrations.calendar_client import create_event
 
 from app.models import Approval
@@ -413,6 +413,7 @@ def send_reply(
                 extra_note = f"\n\nCalendar event created: {link}\n"
         except Exception:
             pass
+    
 
     body = (a.draft_reply or "") + extra_note
     sent = send_email(db=db, workspace_id=workspace_id, to_email=to_email, subject=subject, body=body)
@@ -430,4 +431,53 @@ def send_reply(
         workspace_id=workspace_id,
     )
 
+    # Force original message to remain unread (replying may mark thread read)
+    try:
+        if a.message_id:
+            ensure_unread(db, workspace_id, a.message_id)
+    except Exception:
+        pass
+
     return {"id": a.id, "status": a.status, "sent": sent}
+
+
+@router.post("/approvals/{approval_id}/no-reply")
+def no_reply(
+    approval_id: int,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("admin", "approver")),
+):
+    workspace_id = int(user["workspace_id"])
+
+    a = (
+        db.query(Approval)
+        .filter(Approval.id == approval_id, Approval.workspace_id == workspace_id)
+        .first()
+    )
+    if not a:
+        raise HTTPException(status_code=404, detail="Approval not found")
+
+    # Human decision: can be done from pending/approved/executed
+    if a.status in ("sent", "rejected"):
+        raise HTTPException(status_code=400, detail=f"Cannot set no-reply from status: {a.status}")
+
+    # Force the original email to remain unread
+    try:
+        if a.message_id:
+            ensure_unread(db, workspace_id, a.message_id)
+    except Exception:
+        # Don't fail the operation if Gmail modify fails (but in prod we want it working)
+        pass
+
+    a.status = "no_reply"
+    db.commit()
+    db.refresh(a)
+
+    log_action(
+        db,
+        "NO_REPLY",
+        {"approval_id": a.id, "message_id": a.message_id},
+        workspace_id=workspace_id,
+    )
+
+    return {"id": a.id, "status": a.status}
