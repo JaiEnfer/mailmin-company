@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Dict, Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from googleapiclient.discovery import build
 from sqlalchemy.orm import Session
 
@@ -101,3 +101,56 @@ def is_time_free(
     primary = calendars.get("primary", {})
     busy = primary.get("busy", []) or []
     return len(busy) == 0
+
+def suggest_free_slots(
+    db,
+    workspace_id: int,
+    start_iso: str,
+    duration_minutes: int,
+    timezone: str = "UTC",
+    max_suggestions: int = 3,
+) -> List[str]:
+    """
+    Suggest next available free slots starting from start_iso.
+    Returns list of ISO start times.
+    """
+
+    service = get_calendar_service(db, workspace_id)
+
+    start_dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+
+    suggestions = []
+    search_window_days = 7
+
+    end_search = start_dt + timedelta(days=search_window_days)
+
+    body = {
+        "timeMin": start_dt.isoformat(),
+        "timeMax": end_search.isoformat(),
+        "timeZone": timezone,
+        "items": [{"id": "primary"}],
+    }
+
+    resp = service.freebusy().query(body=body).execute()
+    busy_periods = resp["calendars"]["primary"]["busy"]
+
+    cursor = start_dt
+
+    while len(suggestions) < max_suggestions and cursor < end_search:
+        slot_end = cursor + timedelta(minutes=duration_minutes)
+
+        overlap = False
+        for busy in busy_periods:
+            busy_start = datetime.fromisoformat(busy["start"].replace("Z", "+00:00"))
+            busy_end = datetime.fromisoformat(busy["end"].replace("Z", "+00:00"))
+
+            if not (slot_end <= busy_start or cursor >= busy_end):
+                overlap = True
+                break
+
+        if not overlap:
+            suggestions.append(cursor.isoformat())
+
+        cursor += timedelta(minutes=30)  # check every 30 mins
+
+    return suggestions

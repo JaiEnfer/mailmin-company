@@ -8,7 +8,7 @@ from app.core.pii import redact_pii
 from app.core.roles import require_role
 
 from app.integrations.gmail_client import get_message_metadata, send_email, list_unread, ensure_unread
-from app.integrations.calendar_client import create_event, is_time_free
+from app.integrations.calendar_client import create_event, is_time_free, suggest_free_slots
 
 from app.models import Approval
 from app.services.llm import classify_email, draft_reply
@@ -302,7 +302,8 @@ def execute_action(
 ):
     """
     Execute the approved action ONLY (no email send).
-    Keeps original email unread because we do not modify labels.
+    If calendar slot is busy, return suggested alternative slots instead of failing.
+    Keeps original email unread.
     """
     workspace_id = int(user["workspace_id"])
 
@@ -327,25 +328,62 @@ def execute_action(
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid action_payload JSON for this approval")
 
+        start_iso = payload.get("start_iso")
+        end_iso = payload.get("end_iso")
+        tz = payload.get("timezone", "UTC")
+
+        if not start_iso or not end_iso:
+            raise HTTPException(status_code=400, detail="Missing start_iso/end_iso in action_payload")
+
+        # --- NEW: duration calculation + slot suggestions ---
+        from datetime import datetime
+
+        duration_minutes = 30
+        try:
+            start_dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+            end_dt = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
+            duration_minutes = int((end_dt - start_dt).total_seconds() / 60)
+        except Exception:
+            pass
+
+        if not is_time_free(db, workspace_id, start_iso=start_iso, end_iso=end_iso, timezone=tz):
+            suggestions = suggest_free_slots(
+                db=db,
+                workspace_id=workspace_id,
+                start_iso=start_iso,
+                duration_minutes=duration_minutes,
+                timezone=tz,
+            )
+            # Do NOT change status; user must choose a slot and retry
+            return {
+                "id": a.id,
+                "status": a.status,
+                "conflict": True,
+                "requested": {"start_iso": start_iso, "end_iso": end_iso, "timezone": tz},
+                "suggested_slots": suggestions,
+            }
+        # --- END NEW ---
+
         event = create_event(
             db=db,
             workspace_id=workspace_id,
-            title=payload["title"],
-            start_iso=payload["start_iso"],
-            end_iso=payload["end_iso"],
-            timezone=payload.get("timezone", "UTC"),
+            title=payload.get("title", "Meeting"),
+            start_iso=start_iso,
+            end_iso=end_iso,
+            timezone=tz,
             attendees=payload.get("attendees", []),
             description=payload.get("description", ""),
         )
 
-        # store event link back into payload
+        # store event link (and meet link if your create_event returns it)
         try:
             payload["event_link"] = event.get("htmlLink")
+            if event.get("meetLink"):
+                payload["meet_link"] = event.get("meetLink")
             a.action_payload = json.dumps(payload, ensure_ascii=False)
         except Exception:
             pass
 
-        
         log_action(
             db,
             "CALENDAR_EVENT_CREATED",
@@ -365,7 +403,18 @@ def execute_action(
         workspace_id=workspace_id,
     )
 
-    return {"id": a.id, "status": a.status, "executed": {"action_type": a.action_type, "event": event}}
+    # Keep original email unread (defensive)
+    try:
+        if a.message_id:
+            ensure_unread(db, workspace_id, a.message_id)
+    except Exception:
+        pass
+
+    return {
+        "id": a.id,
+        "status": a.status,
+        "executed": {"action_type": a.action_type, "event": event},
+    }
 
 @router.post("/approvals/{approval_id}/reply")
 def send_reply(
