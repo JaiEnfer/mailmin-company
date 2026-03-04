@@ -1,6 +1,18 @@
+"""Add google_email to workspace
+
+Revision ID: 3225c43b3b3b
+Revises: 5d6c26d92e0a
+Create Date: 2026-03-02
+"""
+
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy import inspect
+
+revision: str = "3225c43b3b3b"
+down_revision = "5d6c26d92e0a"
+branch_labels = None
+depends_on = None
 
 def upgrade():
     conn = op.get_bind()
