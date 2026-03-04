@@ -2,9 +2,10 @@
 
 Revision ID: 3225c43b3b3b
 Revises: 5d6c26d92e0a
-Create Date: 2026-03-02 20:53:23.546742
+Create Date: 2026-03-02
 """
-from typing import Sequence, Union, Set
+
+from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
@@ -17,42 +18,48 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade():
-    # 1) workspaces.google_email (safe add)
-    with op.batch_alter_table("workspaces") as batch_op:
-        if not _has_column("workspaces", "google_email"):
-            batch_op.add_column(sa.Column("google_email", sa.Text(), nullable=True))
+    conn = op.get_bind()
+    inspector = inspect(conn)
 
-    # 2) Ensure google_tokens.token_json exists (safe, no NOT NULL here)
-    if _has_table("google_tokens") and not _has_column("google_tokens", "token_json"):
-        with op.batch_alter_table("google_tokens") as batch_op:
-            batch_op.add_column(sa.Column("token_json", sa.Text(), nullable=True))
+    tables = inspector.get_table_names()
+
+    # ----------------------------------------------------
+    # 1. Add google_email to workspaces if missing
+    # ----------------------------------------------------
+    if "workspaces" in tables:
+        columns = [c["name"] for c in inspector.get_columns("workspaces")]
+
+        if "google_email" not in columns:
+            op.add_column(
+                "workspaces",
+                sa.Column("google_email", sa.Text(), nullable=True)
+            )
+
+    # ----------------------------------------------------
+    # 2. Ensure google_tokens.token_json exists
+    # ----------------------------------------------------
+    if "google_tokens" in tables:
+        columns = [c["name"] for c in inspector.get_columns("google_tokens")]
+
+        if "token_json" not in columns:
+            op.add_column(
+                "google_tokens",
+                sa.Column("token_json", sa.Text(), nullable=True)
+            )
 
 
 def downgrade():
-    # workspaces.google_email
-    if _has_table("workspaces") and _has_column("workspaces", "google_email"):
-        with op.batch_alter_table("workspaces") as batch_op:
-            batch_op.drop_column("google_email")
+    conn = op.get_bind()
+    inspector = inspect(conn)
 
-    # google_tokens.token_json
-    if _has_table("google_tokens") and _has_column("google_tokens", "token_json"):
-        with op.batch_alter_table("google_tokens") as batch_op:
-            batch_op.drop_column("token_json")
+    tables = inspector.get_table_names()
 
+    if "workspaces" in tables:
+        columns = [c["name"] for c in inspector.get_columns("workspaces")]
+        if "google_email" in columns:
+            op.drop_column("workspaces", "google_email")
 
-def _has_table(table_name: str) -> bool:
-    bind = op.get_bind()
-    insp = inspect(bind)
-    return table_name in insp.get_table_names()
-
-
-def _get_columns(table_name: str) -> Set[str]:
-    bind = op.get_bind()
-    insp = inspect(bind)
-    return {c["name"] for c in insp.get_columns(table_name)}
-
-
-def _has_column(table_name: str, col_name: str) -> bool:
-    if not _has_table(table_name):
-        return False
-    return col_name in _get_columns(table_name)
+    if "google_tokens" in tables:
+        columns = [c["name"] for c in inspector.get_columns("google_tokens")]
+        if "token_json" in columns:
+            op.drop_column("google_tokens", "token_json")
