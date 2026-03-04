@@ -1,26 +1,26 @@
-from __future__ import annotations
-
-import json
-from typing import Optional, Dict, Any
-
-from google_auth_oauthlib.flow import Flow
+import os, json
+from typing import Optional
 from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import Flow
 from sqlalchemy.orm import Session
+from app.models import GoogleToken, Workspace
 
-from app.core.config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI
-from app.models import GoogleToken
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
 
 SCOPES = [
-    "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/gmail.send",
-    "https://www.googleapis.com/auth/calendar.events",
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
-    ]
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/calendar.events",
+]
 
 def build_flow(state: Optional[str] = None) -> Flow:
-    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
-        raise RuntimeError("Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET in .env")
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET or not GOOGLE_REDIRECT_URI:
+        raise RuntimeError("Missing GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/GOOGLE_REDIRECT_URI in env")
 
     client_config = {
         "web": {
@@ -31,7 +31,6 @@ def build_flow(state: Optional[str] = None) -> Flow:
             "redirect_uris": [GOOGLE_REDIRECT_URI],
         }
     }
-
     flow = Flow.from_client_config(
         client_config=client_config,
         scopes=SCOPES,
@@ -40,40 +39,25 @@ def build_flow(state: Optional[str] = None) -> Flow:
     )
     return flow
 
-
-def save_credentials_db(db: Session, workspace_id: int, creds: Credentials) -> None:
+def save_credentials_db(db: Session, workspace_id: int, creds: Credentials):
+    token_json = creds.to_json()
     row = db.query(GoogleToken).filter(GoogleToken.workspace_id == workspace_id).first()
-    if not row:
-        row = GoogleToken(workspace_id=workspace_id)
-
-    row.token = creds.token
-    row.refresh_token = creds.refresh_token
-    row.token_uri = creds.token_uri
-    row.client_id = creds.client_id
-    row.client_secret = creds.client_secret
-    row.scopes = json.dumps(list(creds.scopes or []))
-
-    db.add(row)
+    if row:
+        row.token_json = token_json
+    else:
+        row = GoogleToken(workspace_id=workspace_id, token_json=token_json)
+        db.add(row)
     db.commit()
-
 
 def load_credentials_db(db: Session, workspace_id: int) -> Optional[Credentials]:
     row = db.query(GoogleToken).filter(GoogleToken.workspace_id == workspace_id).first()
     if not row:
         return None
+    data = json.loads(row.token_json)
+    return Credentials.from_authorized_user_info(data)
 
-    scopes = []
-    try:
-        scopes = json.loads(row.scopes or "[]")
-    except Exception:
-        scopes = []
-
-    data: Dict[str, Any] = {
-        "token": row.token,
-        "refresh_token": row.refresh_token,
-        "token_uri": row.token_uri,
-        "client_id": row.client_id,
-        "client_secret": row.client_secret,
-        "scopes": scopes,
-    }
-    return Credentials(**data)
+def set_workspace_google_email(db: Session, workspace_id: int, email: str | None):
+    ws = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if ws:
+        ws.google_email = email
+        db.commit()

@@ -18,8 +18,6 @@ def get_engine():
 
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
-        # Allow app to start without DB (CI / minimal endpoints).
-        # Endpoints that need DB will fail with a clear error.
         return None
 
     _engine = create_engine(database_url, pool_pre_ping=True, pool_recycle=1800)

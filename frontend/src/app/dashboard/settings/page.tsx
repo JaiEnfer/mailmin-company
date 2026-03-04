@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { apiGet, apiPostQuery } from "@/lib/api";
+import { apiGet, apiPost, apiPostQuery } from "@/lib/api";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,16 @@ type Workspace = {
   default_meeting_duration_minutes: number;
   company_tone: string;
   auto_execute_actions: boolean;
+
   google_email?: string | null;
+
+  // signature / company identity
+  company_display_name?: string | null;
+  company_email?: string | null;
+  company_address?: string | null;
+  company_phone?: string | null;
+  signature_style?: "team" | "name" | "minimal" | null;
+  signature_name?: string | null;
 };
 
 type CreateUserForm = {
@@ -49,6 +58,7 @@ export default function SettingsPage() {
   const [ok, setOk] = useState<string | null>(null);
 
   const [googleConnected, setGoogleConnected] = useState<boolean | null>(null);
+  const [googleEmail, setGoogleEmail] = useState<string | null>(null);
 
   // Team management (admin only)
   const [teamSaving, setTeamSaving] = useState(false);
@@ -64,9 +74,7 @@ export default function SettingsPage() {
     role: "viewer",
   });
 
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  useEffect(() => setMounted(true), []);
 
   useEffect(() => {
     if (!mounted) return;
@@ -92,8 +100,10 @@ export default function SettingsPage() {
     try {
       const data = await apiGet("/integrations/google/status");
       setGoogleConnected(!!data.connected);
+      setGoogleEmail(data.email || null);
     } catch {
       setGoogleConnected(false);
+      setGoogleEmail(null);
     }
   }
 
@@ -114,7 +124,6 @@ export default function SettingsPage() {
     if (!mounted) return;
     loadWorkspace();
     loadGoogleStatus();
-    // role might not be set yet; we'll refresh users in a separate effect below
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mounted]);
 
@@ -135,6 +144,13 @@ export default function SettingsPage() {
         default_meeting_duration_minutes: ws.default_meeting_duration_minutes,
         company_tone: ws.company_tone,
         auto_execute_actions: ws.auto_execute_actions,
+
+        company_display_name: ws.company_display_name,
+        company_email: ws.company_email,
+        company_phone: ws.company_phone,
+        company_address: ws.company_address,
+        signature_style: ws.signature_style,
+        signature_name: ws.signature_name,
       });
       setWs(updated);
       setOk("Saved successfully.");
@@ -158,6 +174,20 @@ export default function SettingsPage() {
       window.location.href = data.auth_url;
     } catch (e: any) {
       setErr(e?.message || "Google connect failed");
+    }
+  }
+
+  async function disconnectGoogle() {
+    setErr(null);
+    setOk(null);
+    try {
+      // backend should implement: POST /integrations/google/disconnect
+      await apiPost("/integrations/google/disconnect");
+      setOk("Google disconnected.");
+      await loadGoogleStatus();
+      await loadWorkspace();
+    } catch (e: any) {
+      setErr(e?.message || "Google disconnect failed");
     }
   }
 
@@ -192,6 +222,31 @@ export default function SettingsPage() {
     }
   }
 
+  async function disableUser(userId: number) {
+    if (!confirm("Disable this user? They will not be able to log in.")) return;
+    setTeamErr(null);
+    setTeamOk(null);
+    try {
+      await apiPostQuery(`/users/${userId}/disable`, {});
+      setTeamOk("User disabled.");
+      await loadUsers();
+    } catch (e: any) {
+      setTeamErr(e?.message || "Failed to disable user");
+    }
+  }
+
+  async function enableUser(userId: number) {
+    setTeamErr(null);
+    setTeamOk(null);
+    try {
+      await apiPostQuery(`/users/${userId}/enable`, {});
+      setTeamOk("User enabled.");
+      await loadUsers();
+    } catch (e: any) {
+      setTeamErr(e?.message || "Failed to enable user");
+    }
+  }
+
   const googleBadge = useMemo(() => {
     if (googleConnected === null) return "Checking…";
     return googleConnected ? "✅ Google Connected" : "❌ Google Not Connected";
@@ -206,21 +261,15 @@ export default function SettingsPage() {
       <div className="flex items-end justify-between gap-3">
         <div>
           <div className="text-2xl font-semibold tracking-tight">Settings</div>
-          <div className="text-sm text-muted-foreground">
-            Configure MailMind behavior for your workspace.
-          </div>
+          <div className="text-sm text-muted-foreground">Configure MailMind behavior for your workspace.</div>
         </div>
         <Badge variant="secondary" className="rounded-xl">
           Role: {role}
         </Badge>
       </div>
 
-      {err ? (
-        <div className="rounded-xl border p-3 text-sm text-red-600 whitespace-pre-wrap">{err}</div>
-      ) : null}
-      {ok ? (
-        <div className="rounded-xl border p-3 text-sm text-green-700 whitespace-pre-wrap">{ok}</div>
-      ) : null}
+      {err ? <div className="rounded-xl border p-3 text-sm text-red-600 whitespace-pre-wrap">{err}</div> : null}
+      {ok ? <div className="rounded-xl border p-3 text-sm text-green-700 whitespace-pre-wrap">{ok}</div> : null}
 
       {/* Google Integration */}
       <Card className="rounded-2xl shadow-sm">
@@ -233,19 +282,39 @@ export default function SettingsPage() {
           </CardTitle>
         </CardHeader>
 
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-3">
           <div className="text-sm text-muted-foreground">
             Connect Gmail + Calendar so MailMind can sync unread emails and book meetings.
           </div>
 
-          <div className="flex gap-2">
+          {googleConnected ? (
+            <div className="text-sm">
+              <span className="text-muted-foreground">Connected as:</span>{" "}
+              <span className="font-medium">{googleEmail || ws?.google_email || "Unknown"}</span>
+            </div>
+          ) : null}
+
+          <div className="flex flex-wrap gap-2">
             <Button onClick={connectGoogle} className="rounded-xl">
               {googleConnected ? "Reconnect Google" : "Connect Google"}
             </Button>
+
+            {googleConnected && canEdit ? (
+              <Button variant="secondary" className="rounded-xl" onClick={disconnectGoogle}>
+                Disconnect
+              </Button>
+            ) : null}
+
             <Button variant="secondary" className="rounded-xl" onClick={loadGoogleStatus}>
               Refresh status
             </Button>
           </div>
+
+          {!canEdit ? (
+            <div className="text-xs text-muted-foreground">
+              Only admins can disconnect/reconnect integrations.
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 
@@ -325,15 +394,89 @@ export default function SettingsPage() {
                 </div>
               </div>
 
+              <Separator />
+
+              {/* Signature / Company identity (sellable UX) */}
+              <div className="space-y-3">
+                <div className="text-sm font-medium">Email signature</div>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label>Company display name</Label>
+                    <Input
+                      value={ws.company_display_name ?? ""}
+                      onChange={(e) => setWs({ ...ws, company_display_name: e.target.value })}
+                      disabled={!canEdit}
+                      placeholder="Acme Inc."
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Company email</Label>
+                    <Input
+                      value={ws.company_email ?? ""}
+                      onChange={(e) => setWs({ ...ws, company_email: e.target.value })}
+                      disabled={!canEdit}
+                      placeholder="hello@acme.com"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Phone</Label>
+                    <Input
+                      value={ws.company_phone ?? ""}
+                      onChange={(e) => setWs({ ...ws, company_phone: e.target.value })}
+                      disabled={!canEdit}
+                      placeholder="+49 ..."
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Address</Label>
+                    <Input
+                      value={ws.company_address ?? ""}
+                      onChange={(e) => setWs({ ...ws, company_address: e.target.value })}
+                      disabled={!canEdit}
+                      placeholder="Street, City, Country"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Signature style</Label>
+                    <select
+                      className="h-10 w-full rounded-xl border bg-background px-3 text-sm"
+                      value={ws.signature_style ?? "team"}
+                      onChange={(e) => setWs({ ...ws, signature_style: e.target.value as any })}
+                      disabled={!canEdit}
+                    >
+                      <option value="team">Team (MailMind)</option>
+                      <option value="name">Named sender</option>
+                      <option value="minimal">Minimal</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Signature name (if “Named sender”)</Label>
+                    <Input
+                      value={ws.signature_name ?? ""}
+                      onChange={(e) => setWs({ ...ws, signature_name: e.target.value })}
+                      disabled={!canEdit}
+                      placeholder="Alex from Acme"
+                    />
+                  </div>
+                </div>
+
+                <div className="text-xs text-muted-foreground">
+                  This will be appended to future replies so customers see a real business signature.
+                </div>
+              </div>
+
               <div className="flex items-center justify-between">
                 {!canEdit ? (
                   <Badge variant="secondary" className="rounded-xl">
                     View only (admin required to edit)
                   </Badge>
                 ) : (
-                  <div className="text-xs text-muted-foreground">
-                    Changes apply to future drafts and action proposals.
-                  </div>
+                  <div className="text-xs text-muted-foreground">Changes apply to future drafts and action proposals.</div>
                 )}
 
                 <Button className="rounded-xl" onClick={saveWorkspace} disabled={!canEdit || saving}>
@@ -358,14 +501,10 @@ export default function SettingsPage() {
             </div>
 
             {teamErr ? (
-              <div className="rounded-xl border p-3 text-sm text-red-600 whitespace-pre-wrap">
-                {teamErr}
-              </div>
+              <div className="rounded-xl border p-3 text-sm text-red-600 whitespace-pre-wrap">{teamErr}</div>
             ) : null}
             {teamOk ? (
-              <div className="rounded-xl border p-3 text-sm text-green-700 whitespace-pre-wrap">
-                {teamOk}
-              </div>
+              <div className="rounded-xl border p-3 text-sm text-green-700 whitespace-pre-wrap">{teamOk}</div>
             ) : null}
 
             <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -403,9 +542,7 @@ export default function SettingsPage() {
             </div>
 
             <div className="flex items-center justify-between">
-              <div className="text-xs text-muted-foreground">
-                Tip: Use “approver” for teammates who can execute actions.
-              </div>
+              <div className="text-xs text-muted-foreground">Tip: Use “approver” for teammates who can execute actions.</div>
 
               <Button className="rounded-xl" onClick={createTeamUser} disabled={teamSaving}>
                 {teamSaving ? "Creating…" : "Create user"}
@@ -417,12 +554,7 @@ export default function SettingsPage() {
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <div className="text-sm font-medium">Users</div>
-                <Button
-                  variant="secondary"
-                  className="rounded-xl"
-                  onClick={loadUsers}
-                  disabled={usersLoading}
-                >
+                <Button variant="secondary" className="rounded-xl" onClick={loadUsers} disabled={usersLoading}>
                   {usersLoading ? "Refreshing…" : "Refresh users"}
                 </Button>
               </div>
@@ -437,6 +569,7 @@ export default function SettingsPage() {
                         <th className="px-3 py-2 text-left">Email</th>
                         <th className="px-3 py-2 text-left">Role</th>
                         <th className="px-3 py-2 text-left">Status</th>
+                        <th className="px-3 py-2 text-left">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -457,6 +590,17 @@ export default function SettingsPage() {
                               <Badge className="rounded-xl" variant="secondary">
                                 disabled
                               </Badge>
+                            )}
+                          </td>
+                          <td className="px-3 py-2">
+                            {u.is_active ? (
+                              <Button variant="secondary" className="rounded-xl" onClick={() => disableUser(u.id)}>
+                                Disable
+                              </Button>
+                            ) : (
+                              <Button className="rounded-xl" onClick={() => enableUser(u.id)}>
+                                Enable
+                              </Button>
                             )}
                           </td>
                         </tr>

@@ -1,10 +1,9 @@
 from fastapi import Depends, HTTPException
 from app.core.security import get_current_user
 
-def require_role(*allowed_roles: str):
-    def dep(user: dict = Depends(get_current_user)):
-        role = (user.get("role") or "").lower()
-        if role not in [r.lower() for r in allowed_roles]:
+def require_role(*roles: str):
+    def _dep(user: dict = Depends(get_current_user)):
+        if user.get("role") not in roles:
             raise HTTPException(status_code=403, detail="Insufficient role")
         return user
-    return dep
+    return _dep

@@ -3,13 +3,13 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import get_db
 from app.models import User, Workspace
-from app.services.auth import hash_password, verify_password, create_access_token
+from app.services.auth import hash_password, verify_password
+from app.core.security import create_access_token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.post("/register")
 def register(workspace_name: str, email: str, password: str, db: Session = Depends(get_db)):
-    # create workspace + first admin user
     existing = db.query(User).filter(User.email == email).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -19,7 +19,7 @@ def register(workspace_name: str, email: str, password: str, db: Session = Depen
     db.commit()
     db.refresh(ws)
 
-    user = User(workspace_id=ws.id, email=email, password_hash=hash_password(password), role="admin")
+    user = User(workspace_id=ws.id, email=email, password_hash=hash_password(password), role="admin", is_active=True)
     db.add(user)
     db.commit()
     db.refresh(user)

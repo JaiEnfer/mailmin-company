@@ -1,21 +1,14 @@
-import os
-from datetime import datetime, timedelta
 from passlib.context import CryptContext
-from jose import jwt
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-JWT_SECRET = os.getenv("JWT_SECRET", "dev-change-me")
-JWT_ALG = "HS256"
-JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "24"))
+pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    # bcrypt limit is 72 bytes
+    if len(password.encode("utf-8")) > 72:
+        password = password.encode("utf-8")[:72].decode("utf-8", errors="ignore")
+    return pwd.hash(password)
 
 def verify_password(password: str, password_hash: str) -> bool:
-    return pwd_context.verify(password, password_hash)
-
-def create_access_token(payload: dict) -> str:
-    data = payload.copy()
-    data["exp"] = datetime.utcnow() + timedelta(hours=JWT_EXPIRE_HOURS)
-    return jwt.encode(data, JWT_SECRET, algorithm=JWT_ALG)
+    if len(password.encode("utf-8")) > 72:
+        password = password.encode("utf-8")[:72].decode("utf-8", errors="ignore")
+    return pwd.verify(password, password_hash)
