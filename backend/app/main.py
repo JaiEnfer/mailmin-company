@@ -31,6 +31,10 @@ app.include_router(mailmind_router)
 app.include_router(audit_router)
 app.include_router(users_router)
 
+@app.get("/")
+def root():
+    return {"status": "ok", "service": "MailMind API"}
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
