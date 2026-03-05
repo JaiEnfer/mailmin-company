@@ -1,8 +1,8 @@
-"""add google tokens
+"""initial schema
 
-Revision ID: 30ad13ec27cc
-Revises: fa5de6cbe535
-Create Date: 2026-02-26 21:38:57.380979
+Revision ID: 93496fa0940d
+Revises: 
+Create Date: 2026-03-05 01:12:37.772078
 
 """
 from typing import Sequence, Union
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '30ad13ec27cc'
-down_revision: Union[str, Sequence[str], None] = 'fa5de6cbe535'
+revision: str = '93496fa0940d'
+down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
