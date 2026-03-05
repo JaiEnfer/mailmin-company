@@ -1,50 +1,58 @@
-"""add google_email to workspaces safely
+"""Add google_email to workspaces (safe)
 
 Revision ID: 3225c43b3b3b
-Revises: 5d6c26d92e0a
+Revises: <PUT_YOUR_REAL_HEAD_HERE>
 Create Date: 2026-03-02
 """
+from __future__ import annotations
+
+from typing import Sequence, Union, Set
 
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy import inspect
 
-# ✅ These MUST exist at module level for Alembic to load the script
-revision = "3225c43b3b3b"
-down_revision = "5d6c26d92e0a"
-branch_labels = None
-depends_on = None
+# IMPORTANT:
+# - revision must match filename prefix
+# - down_revision must be a revision that EXISTS in your repo
+revision: str = "3225c43b3b3b"
+down_revision: Union[str, Sequence[str], None] = "93496fa0940d"
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade():
     bind = op.get_bind()
     insp = inspect(bind)
-    tables = insp.get_table_names()
 
-    # workspaces.google_email
-    if "workspaces" in tables:
+    # 1) Add workspaces.google_email (nullable)
+    if "workspaces" in insp.get_table_names():
         cols = {c["name"] for c in insp.get_columns("workspaces")}
         if "google_email" not in cols:
-            op.add_column("workspaces", sa.Column("google_email", sa.Text(), nullable=True))
+            with op.batch_alter_table("workspaces") as b:
+                b.add_column(sa.Column("google_email", sa.Text(), nullable=True))
 
-    # google_tokens.token_json (only add if missing, never alter NOT NULL here)
-    if "google_tokens" in tables:
+    # 2) Ensure google_tokens.token_json exists (nullable)
+    # Some DBs may have google_tokens but missing token_json due to earlier schema drift
+    if "google_tokens" in insp.get_table_names():
         cols = {c["name"] for c in insp.get_columns("google_tokens")}
         if "token_json" not in cols:
-            op.add_column("google_tokens", sa.Column("token_json", sa.Text(), nullable=True))
+            with op.batch_alter_table("google_tokens") as b:
+                b.add_column(sa.Column("token_json", sa.Text(), nullable=True))
 
 
 def downgrade():
     bind = op.get_bind()
     insp = inspect(bind)
-    tables = insp.get_table_names()
 
-    if "workspaces" in tables:
+    if "workspaces" in insp.get_table_names():
         cols = {c["name"] for c in insp.get_columns("workspaces")}
         if "google_email" in cols:
-            op.drop_column("workspaces", "google_email")
+            with op.batch_alter_table("workspaces") as b:
+                b.drop_column("google_email")
 
-    if "google_tokens" in tables:
+    if "google_tokens" in insp.get_table_names():
         cols = {c["name"] for c in insp.get_columns("google_tokens")}
         if "token_json" in cols:
-            op.drop_column("google_tokens", "token_json")
+            with op.batch_alter_table("google_tokens") as b:
+                b.drop_column("token_json")
