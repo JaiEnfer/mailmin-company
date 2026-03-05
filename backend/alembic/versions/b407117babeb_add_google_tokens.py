@@ -28,7 +28,7 @@ def upgrade() -> None:
         op.create_table(
             "google_tokens",
             sa.Column("id", sa.Integer(), primary_key=True),
-            sa.Column("workspace_id", sa.Integer(), nullable=False),
+            sa.Column("workspace_id", sa.Integer(), nullable=True),
             sa.Column("token", sa.Text(), nullable=True),
             sa.Column("refresh_token", sa.Text(), nullable=True),
             sa.Column("token_uri", sa.Text(), nullable=True),
