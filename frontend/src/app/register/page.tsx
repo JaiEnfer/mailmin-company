@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import Link from "next/link";
 
-import { setToken } from "@/lib/api";
+import { setToken, registerWorkspace } from "@/lib/api";
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -19,9 +19,6 @@ export default function RegisterPage() {
 
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-
-  const API_BASE =
-    process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
 
   async function onSubmit() {
     setErr(null);
@@ -44,29 +41,13 @@ export default function RegisterPage() {
         throw new Error("Password must be at least 8 characters");
       }
 
-      const url =
-        `${API_BASE}/auth/register?workspace_name=${encodeURIComponent(cleanWorkspace)}` +
-        `&email=${encodeURIComponent(cleanEmail)}` +
-        `&password=${encodeURIComponent(cleanPassword)}`;
+      const data = await registerWorkspace(
+        cleanWorkspace,
+        cleanEmail,
+        cleanPassword
+      );
 
-      const res = await fetch(url, { method: "POST" });
-      const text = await res.text();
-
-      let data: any = null;
-      try {
-        data = text ? JSON.parse(text) : null;
-      } catch {
-        data = null;
-      }
-
-      if (!res.ok) {
-        throw new Error(
-          data?.detail ||
-            data?.message ||
-            text ||
-            `Register failed (${res.status})`
-        );
-      }
+      console.log("REGISTER SUCCESS DATA:", data);
 
       if (!data?.access_token) {
         throw new Error("Register succeeded but no access token was returned");
@@ -75,6 +56,7 @@ export default function RegisterPage() {
       setToken(data.access_token);
       localStorage.setItem("mm_role", data?.user?.role || "admin");
 
+      console.log("TOKEN SAVED, redirecting...");
       router.push("/dashboard/settings");
     } catch (e: any) {
       setErr(e?.message || "Register failed");

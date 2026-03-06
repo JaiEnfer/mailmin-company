@@ -96,5 +96,11 @@ export async function registerWorkspace(
     method: "POST",
   });
 
-  return handleResponse(res);
+  const data = await handleResponse(res);
+
+  if (!data?.access_token) {
+    throw new Error("Registration succeeded but no access token was returned");
+  }
+
+  return data;
 }
