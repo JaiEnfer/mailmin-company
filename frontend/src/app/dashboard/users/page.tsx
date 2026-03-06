@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { apiGet, apiPostQuery } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -32,15 +32,27 @@ export default function UsersPage() {
 
   const canAdmin = role === "admin";
 
+  function getErrorMessage(e: any) {
+    if (!e) return "Request failed";
+    if (typeof e === "string") return e;
+    if (e?.message && typeof e.message === "string") return e.message;
+    if (e?.detail) {
+      if (typeof e.detail === "string") return e.detail;
+      return JSON.stringify(e.detail);
+    }
+    return JSON.stringify(e);
+  }
+
   async function load() {
     setErr(null);
     setOk(null);
     setLoading(true);
+
     try {
       const data = await apiGet("/admin/users");
       setItems(data.items || []);
     } catch (e: any) {
-      setErr(e?.message || "Failed to load users");
+      setErr(getErrorMessage(e) || "Failed to load users");
     } finally {
       setLoading(false);
     }
@@ -63,16 +75,19 @@ export default function UsersPage() {
 
     setCreating(true);
     try {
-      await apiPostQuery("/admin/users", {
+      await apiPost("/admin/users", {
         email: email.trim(),
         password,
         role: newRole,
       });
+
       setOk("User created.");
       setEmail("");
+      setPassword("Pass1234!");
+      setNewRole("viewer");
       await load();
     } catch (e: any) {
-      setErr(e?.message || "Create user failed");
+      setErr(getErrorMessage(e) || "Create user failed");
     } finally {
       setCreating(false);
     }
@@ -81,24 +96,26 @@ export default function UsersPage() {
   async function disableUser(userId: number) {
     setErr(null);
     setOk(null);
+
     try {
-      await apiPostQuery(`/admin/users/${userId}/disable`, {});
+      await apiPost(`/admin/users/${userId}/disable`, {});
       setOk("User disabled.");
       await load();
     } catch (e: any) {
-      setErr(e?.message || "Disable failed");
+      setErr(getErrorMessage(e) || "Disable failed");
     }
   }
 
   async function changeRole(userId: number, r: "admin" | "approver" | "viewer") {
     setErr(null);
     setOk(null);
+
     try {
-      await apiPostQuery(`/admin/users/${userId}/role`, { role: r });
+      await apiPost(`/admin/users/${userId}/role`, { role: r });
       setOk("Role updated.");
       await load();
     } catch (e: any) {
-      setErr(e?.message || "Role update failed");
+      setErr(getErrorMessage(e) || "Role update failed");
     }
   }
 
@@ -116,15 +133,22 @@ export default function UsersPage() {
         </Badge>
       </div>
 
-      {err ? <div className="rounded-xl border p-3 text-sm text-red-600">{err}</div> : null}
-      {ok ? <div className="rounded-xl border p-3 text-sm text-green-700">{ok}</div> : null}
+      {err ? (
+        <div className="rounded-xl border p-3 text-sm text-red-600">{err}</div>
+      ) : null}
+
+      {ok ? (
+        <div className="rounded-xl border p-3 text-sm text-green-700">{ok}</div>
+      ) : null}
 
       <Card className="rounded-2xl shadow-sm">
         <CardHeader>
           <CardTitle className="flex items-center justify-between">
             Create user
             {!canAdmin ? (
-              <Badge variant="secondary" className="rounded-xl">Admin only</Badge>
+              <Badge variant="secondary" className="rounded-xl">
+                Admin only
+              </Badge>
             ) : null}
           </CardTitle>
         </CardHeader>
@@ -138,12 +162,19 @@ export default function UsersPage() {
               <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                 <div className="space-y-2 md:col-span-1">
                   <Label>Email</Label>
-                  <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="user@company.com" />
+                  <Input
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="user@company.com"
+                  />
                 </div>
 
                 <div className="space-y-2 md:col-span-1">
                   <Label>Temp password</Label>
-                  <Input value={password} onChange={(e) => setPassword(e.target.value)} />
+                  <Input
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
                   <div className="text-xs text-muted-foreground">
                     User can change later (we’ll add “change password” next).
                   </div>
@@ -154,7 +185,9 @@ export default function UsersPage() {
                   <select
                     className="h-10 w-full rounded-xl border bg-background px-3 text-sm"
                     value={newRole}
-                    onChange={(e) => setNewRole(e.target.value as any)}
+                    onChange={(e) =>
+                      setNewRole(e.target.value as "admin" | "approver" | "viewer")
+                    }
                   >
                     <option value="viewer">viewer</option>
                     <option value="approver">approver</option>
@@ -208,7 +241,12 @@ export default function UsersPage() {
                     <select
                       className="h-10 rounded-xl border bg-background px-3 text-sm"
                       value={u.role}
-                      onChange={(e) => changeRole(u.id, e.target.value as any)}
+                      onChange={(e) =>
+                        changeRole(
+                          u.id,
+                          e.target.value as "admin" | "approver" | "viewer"
+                        )
+                      }
                       disabled={!u.is_active}
                     >
                       <option value="viewer">viewer</option>
@@ -235,7 +273,8 @@ export default function UsersPage() {
               <Separator className="my-3" />
 
               <div className="text-xs text-muted-foreground">
-                User ID: {u.id}{u.created_at ? ` • Created: ${u.created_at}` : ""}
+                User ID: {u.id}
+                {u.created_at ? ` • Created: ${u.created_at}` : ""}
               </div>
             </div>
           ))}

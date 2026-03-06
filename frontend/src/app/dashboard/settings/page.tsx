@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { apiGet, apiPost, apiPostQuery } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -18,10 +18,7 @@ type Workspace = {
   default_meeting_duration_minutes: number;
   company_tone: string;
   auto_execute_actions: boolean;
-
   google_email?: string | null;
-
-  // signature / company identity
   company_display_name?: string | null;
   company_email?: string | null;
   company_address?: string | null;
@@ -60,7 +57,6 @@ export default function SettingsPage() {
   const [googleConnected, setGoogleConnected] = useState<boolean | null>(null);
   const [googleEmail, setGoogleEmail] = useState<string | null>(null);
 
-  // Team management (admin only)
   const [teamSaving, setTeamSaving] = useState(false);
   const [teamOk, setTeamOk] = useState<string | null>(null);
   const [teamErr, setTeamErr] = useState<string | null>(null);
@@ -139,12 +135,11 @@ export default function SettingsPage() {
     setOk(null);
     setSaving(true);
     try {
-      const updated = await apiPostQuery("/workspace/me", {
+      const updated = await apiPost("/workspace/me", {
         timezone: ws.timezone,
         default_meeting_duration_minutes: ws.default_meeting_duration_minutes,
         company_tone: ws.company_tone,
         auto_execute_actions: ws.auto_execute_actions,
-
         company_display_name: ws.company_display_name,
         company_email: ws.company_email,
         company_phone: ws.company_phone,
@@ -181,7 +176,6 @@ export default function SettingsPage() {
     setErr(null);
     setOk(null);
     try {
-      // backend should implement: POST /integrations/google/disconnect
       await apiPost("/integrations/google/disconnect");
       setOk("Google disconnected.");
       await loadGoogleStatus();
@@ -199,6 +193,7 @@ export default function SettingsPage() {
       setTeamErr("Email is required.");
       return;
     }
+
     if (!newUser.password || newUser.password.length < 8) {
       setTeamErr("Password must be at least 8 characters.");
       return;
@@ -206,7 +201,7 @@ export default function SettingsPage() {
 
     setTeamSaving(true);
     try {
-      const created = await apiPostQuery("/users/create", {
+      const created = await apiPost("/users/create", {
         email: newUser.email.trim(),
         password: newUser.password,
         role: newUser.role,
@@ -227,7 +222,7 @@ export default function SettingsPage() {
     setTeamErr(null);
     setTeamOk(null);
     try {
-      await apiPostQuery(`/users/${userId}/disable`, {});
+      await apiPost(`/users/${userId}/disable`, {});
       setTeamOk("User disabled.");
       await loadUsers();
     } catch (e: any) {
@@ -239,7 +234,7 @@ export default function SettingsPage() {
     setTeamErr(null);
     setTeamOk(null);
     try {
-      await apiPostQuery(`/users/${userId}/enable`, {});
+      await apiPost(`/users/${userId}/enable`, {});
       setTeamOk("User enabled.");
       await loadUsers();
     } catch (e: any) {
@@ -261,7 +256,9 @@ export default function SettingsPage() {
       <div className="flex items-end justify-between gap-3">
         <div>
           <div className="text-2xl font-semibold tracking-tight">Settings</div>
-          <div className="text-sm text-muted-foreground">Configure MailMind behavior for your workspace.</div>
+          <div className="text-sm text-muted-foreground">
+            Configure MailMind behavior for your workspace.
+          </div>
         </div>
         <Badge variant="secondary" className="rounded-xl">
           Role: {role}
@@ -271,7 +268,6 @@ export default function SettingsPage() {
       {err ? <div className="rounded-xl border p-3 text-sm text-red-600 whitespace-pre-wrap">{err}</div> : null}
       {ok ? <div className="rounded-xl border p-3 text-sm text-green-700 whitespace-pre-wrap">{ok}</div> : null}
 
-      {/* Google Integration */}
       <Card className="rounded-2xl shadow-sm">
         <CardHeader>
           <CardTitle className="flex items-center justify-between">
@@ -318,7 +314,6 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
-      {/* Workspace config */}
       <Card className="rounded-2xl shadow-sm">
         <CardHeader>
           <CardTitle className="flex items-center justify-between">
@@ -396,7 +391,6 @@ export default function SettingsPage() {
 
               <Separator />
 
-              {/* Signature / Company identity (sellable UX) */}
               <div className="space-y-3">
                 <div className="text-sm font-medium">Email signature</div>
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -476,7 +470,9 @@ export default function SettingsPage() {
                     View only (admin required to edit)
                   </Badge>
                 ) : (
-                  <div className="text-xs text-muted-foreground">Changes apply to future drafts and action proposals.</div>
+                  <div className="text-xs text-muted-foreground">
+                    Changes apply to future drafts and action proposals.
+                  </div>
                 )}
 
                 <Button className="rounded-xl" onClick={saveWorkspace} disabled={!canEdit || saving}>
@@ -488,7 +484,6 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
-      {/* Team management */}
       {role === "admin" ? (
         <Card className="rounded-2xl shadow-sm">
           <CardHeader>
@@ -532,7 +527,9 @@ export default function SettingsPage() {
                 <select
                   className="h-10 w-full rounded-xl border bg-background px-3 text-sm"
                   value={newUser.role}
-                  onChange={(e) => setNewUser({ ...newUser, role: e.target.value as any })}
+                  onChange={(e) =>
+                    setNewUser({ ...newUser, role: e.target.value as "viewer" | "approver" | "admin" })
+                  }
                 >
                   <option value="viewer">Viewer</option>
                   <option value="approver">Approver</option>
@@ -542,7 +539,9 @@ export default function SettingsPage() {
             </div>
 
             <div className="flex items-center justify-between">
-              <div className="text-xs text-muted-foreground">Tip: Use “approver” for teammates who can execute actions.</div>
+              <div className="text-xs text-muted-foreground">
+                Tip: Use “approver” for teammates who can execute actions.
+              </div>
 
               <Button className="rounded-xl" onClick={createTeamUser} disabled={teamSaving}>
                 {teamSaving ? "Creating…" : "Create user"}

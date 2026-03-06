@@ -20,18 +20,37 @@ export default function LoginPage() {
 
   async function onSubmit() {
     setErr(null);
+
+    // ✅ hard validation before calling backend
+    const e = email.trim();
+    const p = password;
+
+    if (!e || !p) {
+      setErr("Please enter email and password.");
+      return;
+    }
+
     setLoading(true);
     try {
-      const url = `${API_BASE}/auth/login?email=${encodeURIComponent(email)}&password=${encodeURIComponent(password)}`;
+      const apiBase = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+      const url =
+        `${apiBase}/auth/login?email=${encodeURIComponent(e)}` +
+        `&password=${encodeURIComponent(p)}`;
+
       const res = await fetch(url, { method: "POST" });
-      const data = await res.json();
+
+      // ✅ handle non-json errors safely
+      const text = await res.text();
+      let data: any = {};
+      try { data = JSON.parse(text); } catch {}
+
       if (!res.ok) throw new Error(data?.detail || `Login failed (${res.status})`);
 
       setToken(data.access_token);
       localStorage.setItem("mm_role", data.user.role);
-      router.push("/dashboard");
+      router.push("/dashboard/approvals");
     } catch (e: any) {
-      setErr(e.message || "Login failed");
+      setErr(e?.message || "Login failed");
     } finally {
       setLoading(false);
     }

@@ -7,8 +7,12 @@ from app.core.security import get_current_user
 from app.core.pii import redact_pii
 from app.core.roles import require_role
 
-from app.integrations.gmail_client import get_message_metadata, send_email, list_unread, ensure_unread
-from app.integrations.calendar_client import create_event, is_time_free
+from app.integrations.gmail_client import (
+    get_message_metadata,
+    send_email,
+    list_unread,
+)
+from app.integrations.calendar_client import create_event
 
 from app.models import Approval, Workspace
 from app.services.llm import classify_email, draft_reply
@@ -18,15 +22,135 @@ from app.services.signature import build_signature
 
 router = APIRouter(prefix="/mailmind", tags=["mailmind"])
 
+
+def _get_email_text(msg: dict) -> str:
+    return (msg.get("body") or msg.get("snippet") or "").strip()
+
+
+def _parse_email_address(raw: str) -> str:
+    if not raw:
+        return ""
+    if "<" in raw and ">" in raw:
+        return raw.split("<", 1)[1].split(">", 1)[0].strip()
+    return raw.strip()
+
+
+def _load_action_payload(a: Approval) -> dict:
+    if not a.action_payload:
+        return {}
+    try:
+        return json.loads(a.action_payload)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid action_payload JSON for this approval")
+
+
+def _extract_calendar_fields(payload: dict, approval_subject: str = "") -> dict:
+    return {
+        "title": (payload.get("title") or approval_subject or "Meeting").strip(),
+        "start_iso": (payload.get("start_iso") or "").strip(),
+        "end_iso": (payload.get("end_iso") or "").strip(),
+        "timezone": (payload.get("timezone") or "Europe/Berlin").strip(),
+        "attendees": payload.get("attendees", []) or [],
+        "description": payload.get("description", "") or "",
+    }
+
+
+def _rebuild_calendar_payload_from_message(
+    db: Session,
+    workspace_id: int,
+    approval: Approval,
+) -> dict:
+    if not approval.message_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot rebuild calendar payload because message_id is missing.",
+        )
+
+    msg = get_message_metadata(db, workspace_id, approval.message_id)
+    msg["snippet"] = redact_pii(msg.get("snippet"))
+
+    email_text = _get_email_text(msg)
+
+    classification = classify_email(
+        msg.get("from"),
+        msg.get("subject"),
+        email_text,
+    )
+
+    rebuilt = analyze_email_for_action(classification, msg)
+    print("REBUILT ACTION DEBUG:", rebuilt)
+
+    if (rebuilt.get("action_type") or "none") != "calendar_create":
+        raise HTTPException(
+            status_code=400,
+            detail="Could not rebuild calendar action from the original email.",
+        )
+
+    rebuilt_payload = rebuilt.get("payload") or {}
+    fields = _extract_calendar_fields(rebuilt_payload, approval.subject or "Meeting")
+
+    approval.action_payload = json.dumps(
+        {
+            "title": fields["title"],
+            "start_iso": fields["start_iso"],
+            "end_iso": fields["end_iso"],
+            "timezone": fields["timezone"],
+            "attendees": fields["attendees"],
+            "description": fields["description"],
+        },
+        ensure_ascii=False,
+    )
+    db.commit()
+    db.refresh(approval)
+
+    return fields
+
+
 @router.get("/stats")
 def mailmind_stats(db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     workspace_id = int(user["workspace_id"])
-    pending = db.query(Approval).filter(Approval.workspace_id == workspace_id, Approval.status == "pending").count()
-    approved = db.query(Approval).filter(Approval.workspace_id == workspace_id, Approval.status == "approved").count()
-    sent = db.query(Approval).filter(Approval.workspace_id == workspace_id, Approval.status == "sent").count()
-    executed = db.query(Approval).filter(Approval.workspace_id == workspace_id, Approval.status == "executed").count()
-    noreply = db.query(Approval).filter(Approval.workspace_id == workspace_id, Approval.status == "no_reply").count()
-    return {"pending": pending, "approved": approved, "sent": sent, "executed": executed, "no_reply": noreply}
+
+    pending = (
+        db.query(Approval)
+        .filter(Approval.workspace_id == workspace_id, Approval.status == "pending")
+        .count()
+    )
+    approved = (
+        db.query(Approval)
+        .filter(Approval.workspace_id == workspace_id, Approval.status == "approved")
+        .count()
+    )
+    sent = (
+        db.query(Approval)
+        .filter(Approval.workspace_id == workspace_id, Approval.status == "sent")
+        .count()
+    )
+
+    # Count approvals whose action was actually executed,
+    # even if their final status later became "sent".
+    executed = (
+        db.query(Approval)
+        .filter(
+            Approval.workspace_id == workspace_id,
+            Approval.action_type != "none",
+            Approval.status.in_(["executed", "sent"]),
+        )
+        .count()
+    )
+
+    noreply = (
+        db.query(Approval)
+        .filter(Approval.workspace_id == workspace_id, Approval.status == "no_reply")
+        .count()
+    )
+
+    return {
+        "pending": pending,
+        "approved": approved,
+        "sent": sent,
+        "executed": executed,
+        "no_reply": noreply,
+    }
 
 @router.post("/sync-unread")
 def sync_unread(
@@ -43,24 +167,55 @@ def sync_unread(
         q="is:unread",
     )
 
-    # Workspace signature (once), then apply per-email reply inside loop
     ws = db.query(Workspace).filter(Workspace.id == workspace_id).first()
     sig = build_signature(ws) if ws else ""
 
     created = 0
     skipped_existing = 0
+    skipped_duplicate_thread = 0
     approval_ids: list[int] = []
     message_ids: list[str] = []
 
+    # Prevent multiple approvals in one sync run for the same thread
+    seen_thread_ids: set[str] = set()
+
     for it in (unread_items or []):
-        # list_unread returns list[dict], each dict contains id
         message_id = (it or {}).get("id")
         if not message_id:
             continue
 
+        msg = get_message_metadata(db, workspace_id, message_id)
+        msg["snippet"] = redact_pii(msg.get("snippet"))
+
+        thread_id = (msg.get("thread_id") or msg.get("threadId") or "").strip()
+        if not thread_id:
+            thread_id = f"msg:{message_id}"
+
+        if thread_id in seen_thread_ids:
+            skipped_duplicate_thread += 1
+            continue
+
+        seen_thread_ids.add(thread_id)
         message_ids.append(message_id)
 
-        exists = (
+        # Skip if we already have an approval for this thread that is still active
+        existing_thread_approval = (
+            db.query(Approval)
+            .filter(
+                Approval.workspace_id == workspace_id,
+                Approval.thread_id == thread_id,
+                Approval.status.in_(["pending", "approved", "sent", "executed", "no_reply"]),
+            )
+            .order_by(Approval.id.desc())
+            .first()
+        )
+
+        if existing_thread_approval:
+            skipped_existing += 1
+            continue
+
+        # Fallback: old rows may only match by message_id
+        existing_message_approval = (
             db.query(Approval)
             .filter(
                 Approval.workspace_id == workspace_id,
@@ -68,20 +223,22 @@ def sync_unread(
             )
             .first()
         )
-        if exists:
+
+        if existing_message_approval:
             skipped_existing += 1
             continue
 
-        msg = get_message_metadata(db, workspace_id, message_id)
-        msg["snippet"] = redact_pii(msg.get("snippet"))
+        email_text = _get_email_text(msg)
 
         classification = classify_email(
             msg.get("from"),
             msg.get("subject"),
-            msg.get("snippet"),
+            email_text,
         )
 
         action = analyze_email_for_action(classification, msg)
+        print("ACTION DEBUG:", action)
+
         action_type = action.get("action_type") or "none"
         action_payload = action.get("payload")
         if action_payload:
@@ -90,10 +247,9 @@ def sync_unread(
         reply = draft_reply(
             msg.get("from"),
             msg.get("subject"),
-            msg.get("snippet"),
+            email_text,
         )
 
-        # ✅ Apply signature to THIS email's reply
         if sig:
             reply = reply.rstrip() + "\n\nBest regards,\n" + sig + "\n"
 
@@ -116,6 +272,7 @@ def sync_unread(
             {
                 "approval_id": approval.id,
                 "message_id": message_id,
+                "thread_id": thread_id,
                 "action_type": approval.action_type,
             },
             workspace_id=workspace_id,
@@ -128,6 +285,7 @@ def sync_unread(
             "fetched": len(unread_items or []),
             "created": created,
             "skipped_existing": skipped_existing,
+            "skipped_duplicate_thread": skipped_duplicate_thread,
         },
         workspace_id=workspace_id,
     )
@@ -136,6 +294,7 @@ def sync_unread(
         "fetched": len(unread_items or []),
         "created": created,
         "skipped_existing": skipped_existing,
+        "skipped_duplicate_thread": skipped_duplicate_thread,
         "approval_ids": approval_ids,
         "message_ids": message_ids,
     }
@@ -165,12 +324,14 @@ def approvals_list(status: str | None = None, limit: int = 50, db: Session = Dep
         ]
     }
 
+
 @router.post("/approvals/{approval_id}/approve")
 def approve(approval_id: int, db: Session = Depends(get_db), user: dict = Depends(require_role("admin", "approver"))):
     workspace_id = int(user["workspace_id"])
     a = set_approval_status(db, workspace_id, approval_id, "approved")
     log_action(db, "APPROVED", {"approval_id": approval_id}, workspace_id=workspace_id)
     return {"id": a.id, "status": a.status}
+
 
 @router.post("/approvals/{approval_id}/reject")
 def reject(approval_id: int, db: Session = Depends(get_db), user: dict = Depends(require_role("admin", "approver"))):
@@ -179,18 +340,13 @@ def reject(approval_id: int, db: Session = Depends(get_db), user: dict = Depends
     log_action(db, "REJECTED", {"approval_id": approval_id}, workspace_id=workspace_id)
     return {"id": a.id, "status": a.status}
 
+
 @router.post("/approvals/{approval_id}/send")
 def send_and_execute(
     approval_id: int,
     db: Session = Depends(get_db),
     user: dict = Depends(require_role("admin", "approver")),
 ):
-    """
-    Finalize an approval:
-    1) Execute action (e.g., create calendar event) if needed
-    2) Send reply in the SAME Gmail thread
-    3) Keep original email UNREAD
-    """
     workspace_id = int(user["workspace_id"])
 
     a = (
@@ -200,51 +356,78 @@ def send_and_execute(
     )
     if not a:
         raise HTTPException(status_code=404, detail="Approval not found")
+
+    if a.status == "sent":
+        raise HTTPException(status_code=400, detail="This approval was already sent.")
+
     if a.status != "approved":
         raise HTTPException(
             status_code=400,
             detail=f"Approval status must be 'approved' (current: {a.status})",
         )
 
-    # Extract email inside <> if present
-    to_raw = a.from_email or ""
-    to_email = to_raw
-    if "<" in to_raw and ">" in to_raw:
-        to_email = to_raw.split("<", 1)[1].split(">", 1)[0].strip()
+    to_email = _parse_email_address(a.from_email or "")
 
     subject = a.subject or ""
     if subject and not subject.lower().startswith("re:"):
         subject = f"Re: {subject}"
 
-    # 1) Execute action if present
     event = None
     extra_note = ""
 
-    if a.action_type == "calendar_create" and a.action_payload:
-        try:
-            payload = json.loads(a.action_payload)
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid action_payload JSON for this approval")
+    if a.action_type == "calendar_create":
+        payload = _load_action_payload(a)
+        fields = _extract_calendar_fields(payload, a.subject or "Meeting")
 
-        # Optional: time-free check if you have it
-        # if not is_time_free(db, workspace_id, payload["start_iso"], payload["end_iso"], payload.get("timezone", "UTC")):
-        #     raise HTTPException(status_code=409, detail="Time slot is not free")
+        if not fields["start_iso"] or not fields["end_iso"]:
+            fields = _rebuild_calendar_payload_from_message(db, workspace_id, a)
 
+        if not fields["title"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot create calendar event because title is missing in action payload.",
+            )
+
+        if not fields["start_iso"] or not fields["end_iso"]:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Cannot create calendar event because meeting date/time is missing even after re-analysis. "
+                    f"start_iso={fields['start_iso']!r}, end_iso={fields['end_iso']!r}, "
+                    f"timezone={fields['timezone']!r}"
+                ),
+            )
+
+        print("SEND CALENDAR PAYLOAD:", {
+                "title": fields["title"],
+                "start_iso": fields["start_iso"],
+                "end_iso": fields["end_iso"],
+                "timezone": fields["timezone"],
+                "attendees": fields["attendees"],
+            })
+            
         event = create_event(
             db=db,
             workspace_id=workspace_id,
-            title=payload["title"],
-            start_iso=payload["start_iso"],
-            end_iso=payload["end_iso"],
-            timezone=payload.get("timezone", "UTC"),
-            attendees=payload.get("attendees", []),
-            description=payload.get("description", ""),
+            title=fields["title"],
+            start_iso=fields["start_iso"],
+            end_iso=fields["end_iso"],
+            timezone=fields["timezone"],
+            attendees=fields["attendees"],
+            description=fields["description"],
         )
 
-        # Store event link back into payload for audit/history
         try:
+            payload["title"] = fields["title"]
+            payload["start_iso"] = fields["start_iso"]
+            payload["end_iso"] = fields["end_iso"]
+            payload["timezone"] = fields["timezone"]
+            payload["attendees"] = fields["attendees"]
+            payload["description"] = fields["description"]
             payload["event_link"] = event.get("htmlLink")
             a.action_payload = json.dumps(payload, ensure_ascii=False)
+            db.commit()
+            db.refresh(a)
         except Exception:
             pass
 
@@ -258,7 +441,6 @@ def send_and_execute(
             workspace_id=workspace_id,
         )
 
-    # 2) Send reply in-thread
     body = (a.draft_reply or "") + extra_note
 
     sent = send_email(
@@ -284,32 +466,23 @@ def send_and_execute(
         workspace_id=workspace_id,
     )
 
-    # 3) Keep original message UNREAD (reply can mark thread read)
-    try:
-        if a.message_id:
-            ensure_unread(db, workspace_id, a.message_id)
-    except Exception:
-        pass
-
     return {"id": a.id, "status": a.status, "sent": sent, "event": event}
+
 
 @router.post("/approvals/{approval_id}/reply")
 def send_reply(approval_id: int, db: Session = Depends(get_db), user: dict = Depends(require_role("admin", "approver"))):
-    """
-    Send the draft reply in-thread. Keeps original unread.
-    """
     workspace_id = int(user["workspace_id"])
     a = db.query(Approval).filter(Approval.id == approval_id, Approval.workspace_id == workspace_id).first()
     if not a:
         raise HTTPException(status_code=404, detail="Approval not found")
 
+    if a.status == "sent":
+        raise HTTPException(status_code=400, detail="This approval was already sent.")
+
     if a.status not in ("approved", "executed"):
         raise HTTPException(status_code=400, detail=f"Status must be approved or executed (current: {a.status})")
 
-    to_raw = a.from_email or ""
-    to_email = to_raw
-    if "<" in to_raw and ">" in to_raw:
-        to_email = to_raw.split("<", 1)[1].split(">", 1)[0].strip()
+    to_email = _parse_email_address(a.from_email or "")
 
     subject = a.subject or ""
     if subject and not subject.lower().startswith("re:"):
@@ -344,12 +517,8 @@ def send_reply(approval_id: int, db: Session = Depends(get_db), user: dict = Dep
 
     log_action(db, "SENT_EMAIL", {"approval_id": a.id, "to": to_email, "sent": sent}, workspace_id=workspace_id)
 
-    try:
-        ensure_unread(db, workspace_id, a.message_id)
-    except Exception:
-        pass
-
     return {"id": a.id, "status": a.status, "sent": sent}
+
 
 @router.post("/approvals/{approval_id}/no-reply")
 def no_reply(approval_id: int, db: Session = Depends(get_db), user: dict = Depends(require_role("admin", "approver"))):
@@ -360,11 +529,6 @@ def no_reply(approval_id: int, db: Session = Depends(get_db), user: dict = Depen
 
     if a.status in ("sent", "rejected"):
         raise HTTPException(status_code=400, detail=f"Cannot set no-reply from status: {a.status}")
-
-    try:
-        ensure_unread(db, workspace_id, a.message_id)
-    except Exception:
-        pass
 
     a.status = "no_reply"
     db.commit()

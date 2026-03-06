@@ -9,11 +9,59 @@ from sqlalchemy.orm import Session
 
 from app.integrations.google_oauth import load_credentials_db
 
+
 def get_gmail_service(db: Session, workspace_id: int):
     creds = load_credentials_db(db, workspace_id)
     if not creds:
         raise RuntimeError("Not authenticated for this workspace. Connect Google in Settings.")
     return build("gmail", "v1", credentials=creds)
+
+
+def _decode_b64url(data: Optional[str]) -> str:
+    if not data:
+        return ""
+    try:
+        padded = data + "=" * (-len(data) % 4)
+        return base64.urlsafe_b64decode(padded.encode("utf-8")).decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def _extract_text_from_payload(payload: Dict[str, Any]) -> str:
+    if not payload:
+        return ""
+
+    mime_type = payload.get("mimeType", "")
+    body_data = (payload.get("body") or {}).get("data")
+
+    if mime_type == "text/plain" and body_data:
+        return _decode_b64url(body_data)
+
+    parts = payload.get("parts") or []
+    if parts:
+        plain_parts: list[str] = []
+        html_parts: list[str] = []
+
+        for part in parts:
+            text = _extract_text_from_payload(part)
+            if not text:
+                continue
+            part_type = part.get("mimeType", "")
+            if part_type == "text/plain":
+                plain_parts.append(text)
+            else:
+                html_parts.append(text)
+
+        if plain_parts:
+            return "\n".join(p for p in plain_parts if p).strip()
+        if html_parts:
+            return "\n".join(p for p in html_parts if p).strip()
+
+    if body_data:
+        return _decode_b64url(body_data)
+
+    return ""
+
 
 def list_unread(
     db: Session,
@@ -24,7 +72,12 @@ def list_unread(
     service = get_gmail_service(db, workspace_id)
     query = (q or "is:unread").strip()
 
-    resp = service.users().messages().list(userId="me", q=query, maxResults=max_results).execute()
+    resp = service.users().messages().list(
+        userId="me",
+        q=query,
+        maxResults=max_results,
+    ).execute()
+
     messages = resp.get("messages", []) or []
 
     results: List[Dict[str, Any]] = []
@@ -45,6 +98,7 @@ def list_unread(
             {
                 "id": msg.get("id"),
                 "threadId": msg.get("threadId"),
+                "thread_id": msg.get("threadId"),
                 "from": headers.get("From"),
                 "subject": headers.get("Subject"),
                 "date": headers.get("Date"),
@@ -54,24 +108,32 @@ def list_unread(
 
     return results
 
+
 def get_message_metadata(db: Session, workspace_id: int, message_id: str) -> Dict[str, Any]:
     service = get_gmail_service(db, workspace_id)
     msg = service.users().messages().get(
         userId="me",
         id=message_id,
-        format="metadata",
-        metadataHeaders=["From", "To", "Subject", "Date", "Message-ID", "References"],
+        format="full",
     ).execute()
 
     headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
+    body_text = _extract_text_from_payload(msg.get("payload") or {})
+
     return {
         "id": msg.get("id"),
         "threadId": msg.get("threadId"),
+        "thread_id": msg.get("threadId"),
         "from": headers.get("From"),
+        "to": headers.get("To"),
         "subject": headers.get("Subject"),
         "date": headers.get("Date"),
+        "message_id_header": headers.get("Message-ID"),
+        "references": headers.get("References"),
         "snippet": msg.get("snippet"),
+        "body": body_text,
     }
+
 
 def get_message_reply_headers(db: Session, workspace_id: int, message_id: str) -> Dict[str, str]:
     service = get_gmail_service(db, workspace_id)
@@ -81,8 +143,10 @@ def get_message_reply_headers(db: Session, workspace_id: int, message_id: str) -
         format="metadata",
         metadataHeaders=["Message-ID", "References"],
     ).execute()
+
     headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
     return headers
+
 
 def send_email(
     db: Session,
@@ -106,15 +170,17 @@ def send_email(
         if orig_msgid:
             msg["In-Reply-To"] = orig_msgid
             refs = h.get("References")
-            msg["References"] = (refs + " " + orig_msgid).strip() if refs else orig_msgid
+            msg["References"] = f"{refs} {orig_msgid}".strip() if refs else orig_msgid
 
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
+
     payload: Dict[str, Any] = {"raw": raw}
     if thread_id:
         payload["threadId"] = thread_id
 
     sent = service.users().messages().send(userId="me", body=payload).execute()
     return {"id": sent.get("id"), "threadId": sent.get("threadId")}
+
 
 def ensure_unread(db: Session, workspace_id: int, message_id: str) -> None:
     service = get_gmail_service(db, workspace_id)

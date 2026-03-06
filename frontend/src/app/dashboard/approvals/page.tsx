@@ -95,7 +95,6 @@ export default function ApprovalsPage() {
     setErr(null);
     setLoading(true);
     try {
-      // pull ALL, then group on the client
       const data = await apiGet("/mailmind/approvals?limit=200");
       setItems(data.items || []);
     } catch (e: any) {
@@ -132,7 +131,6 @@ export default function ApprovalsPage() {
   async function executeAction(id: number) {
     setErr(null);
     try {
-      // this is your action-only endpoint under /send
       await apiPost(`/mailmind/approvals/${id}/send`);
       await loadAll();
     } catch (e: any) {
@@ -161,24 +159,49 @@ export default function ApprovalsPage() {
   }
 
   const grouped = useMemo(() => {
-    const by = (st: string) => items.filter((x) => (x.status || "").toLowerCase() === st);
+    const statusOf = (x: Approval) => (x.status || "").toLowerCase();
+    const actionOf = (x: Approval) => (x.action_type || "").toLowerCase().trim();
+    const hasRealAction = (x: Approval) => {
+      const action = actionOf(x);
+      return !!action && action !== "none";
+    };
 
-    const pending = by("pending");
-    const approved = by("approved");
-    const executed = by("executed");
-    const sent = by("sent");
-    const no_reply = by("no_reply");
-    const rejected = by("rejected");
+    const pending = items.filter((x) => statusOf(x) === "pending");
+    const approved = items.filter((x) => statusOf(x) === "approved");
 
-    // anything unknown goes to "Other"
-    const known = new Set(["pending", "approved", "executed", "sent", "no_reply", "rejected"]);
-    const other = items.filter((x) => !known.has((x.status || "").toLowerCase()));
+    // Action executed if:
+    // - backend explicitly says executed
+    // - OR it was sent and had a real action attached
+    const executed = items.filter(
+      (x) => statusOf(x) === "executed" || (statusOf(x) === "sent" && hasRealAction(x))
+    );
+
+    // Pure replies: sent items with no action
+    const sent = items.filter(
+      (x) => statusOf(x) === "sent" && !hasRealAction(x)
+    );
+
+    const no_reply = items.filter((x) => statusOf(x) === "no_reply");
+    const rejected = items.filter((x) => statusOf(x) === "rejected");
+
+    const knownIds = new Set([
+      ...pending.map((x) => x.id),
+      ...approved.map((x) => x.id),
+      ...executed.map((x) => x.id),
+      ...sent.map((x) => x.id),
+      ...no_reply.map((x) => x.id),
+      ...rejected.map((x) => x.id),
+    ]);
+
+    const other = items.filter((x) => !knownIds.has(x.id));
 
     return { pending, approved, executed, sent, no_reply, rejected, other };
   }, [items]);
 
   function ApprovalCard(a: Approval) {
     const status = (a.status || "").toLowerCase();
+    const action = (a.action_type || "").toLowerCase().trim();
+    const hasRealAction = !!action && action !== "none";
 
     return (
       <div key={a.id} className="rounded-2xl border p-4">
@@ -219,7 +242,13 @@ export default function ApprovalsPage() {
                 </>
               ) : null}
 
-              {status === "sent" ? (
+              {status === "sent" && hasRealAction ? (
+                <Badge variant="secondary" className="rounded-xl">
+                  Action executed
+                </Badge>
+              ) : null}
+
+              {status === "sent" && !hasRealAction ? (
                 <Badge variant="secondary" className="rounded-xl">
                   Replied
                 </Badge>

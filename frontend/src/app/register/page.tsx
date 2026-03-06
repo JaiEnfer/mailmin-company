@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import Link from "next/link";
 
-import { setToken, API_BASE } from "@/lib/api";
+import { setToken } from "@/lib/api";
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -19,22 +19,44 @@ export default function RegisterPage() {
 
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [API_BASE] = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+
+  const API_BASE =
+    process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
 
   async function onSubmit() {
     setErr(null);
     setLoading(true);
+
     try {
       const url =
         `${API_BASE}/auth/register?workspace_name=${encodeURIComponent(workspace)}` +
-        `&email=${encodeURIComponent(email)}&password=${encodeURIComponent(password)}`;
+        `&email=${encodeURIComponent(email)}` +
+        `&password=${encodeURIComponent(password)}`;
+
+      console.log("Registering with URL:", url);
+      console.log("API_BASE:", API_BASE);
 
       const res = await fetch(url, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.detail || `Register failed (${res.status})`);
+
+      const contentType = res.headers.get("content-type") || "";
+      const text = await res.text();
+
+      let data: any = null;
+
+      if (contentType.includes("application/json")) {
+        data = JSON.parse(text);
+      }
+
+      if (!res.ok) {
+        throw new Error(
+          data?.detail ||
+            `Register failed (${res.status}). Response: ${text.slice(0, 120)}`
+        );
+      }
 
       setToken(data.access_token);
       localStorage.setItem("mm_role", data.user.role);
+
       router.push("/dashboard/settings");
     } catch (e: any) {
       setErr(e.message || "Register failed");
@@ -56,15 +78,28 @@ export default function RegisterPage() {
           <CardContent className="space-y-4">
             <div className="space-y-2">
               <Label>Company / Workspace name</Label>
-              <Input value={workspace} onChange={(e) => setWorkspace(e.target.value)} placeholder="Acme Inc." />
+              <Input
+                value={workspace}
+                onChange={(e) => setWorkspace(e.target.value)}
+                placeholder="Acme Inc."
+              />
             </div>
             <div className="space-y-2">
               <Label>Admin email</Label>
-              <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="admin@acme.com" />
+              <Input
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="admin@acme.com"
+              />
             </div>
             <div className="space-y-2">
               <Label>Password</Label>
-              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Min 8 chars" />
+              <Input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Min 8 chars"
+              />
             </div>
 
             {err ? <div className="text-sm text-red-600">{err}</div> : null}
@@ -72,6 +107,7 @@ export default function RegisterPage() {
             <Button onClick={onSubmit} disabled={loading} className="w-full rounded-xl">
               {loading ? "Creating..." : "Create workspace"}
             </Button>
+
             <div className="text-center text-sm text-muted-foreground">
               Already have an account?{" "}
               <Link href="/login" className="underline underline-offset-4">

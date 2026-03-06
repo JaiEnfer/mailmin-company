@@ -1,9 +1,15 @@
 import json
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 def build_meeting_payload(timezone: str = "Europe/Berlin") -> str:
-    # MVP: tomorrow 10:00–10:30 local time
-    start = (datetime.now() + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
+    try:
+        tz = ZoneInfo(timezone)
+    except Exception:
+        tz = ZoneInfo("UTC")
+
+    now = datetime.now(tz)
+    start = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
     end = start + timedelta(minutes=30)
 
     payload = {
