@@ -1,5 +1,5 @@
 export const API_BASE =
-  (process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000").replace(/\/$/, "");
+  (process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000").replace(/\/+$/, "");
 
 export function setToken(token: string) {
   if (typeof window !== "undefined") {
@@ -77,6 +77,23 @@ export async function apiPostQuery(path: string, params: Record<string, any>) {
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
+  });
+
+  return handleResponse(res);
+}
+
+export async function registerWorkspace(
+  workspace_name: string,
+  email: string,
+  password: string
+) {
+  const query =
+    `workspace_name=${encodeURIComponent(workspace_name)}` +
+    `&email=${encodeURIComponent(email)}` +
+    `&password=${encodeURIComponent(password)}`;
+
+  const res = await fetch(`${API_BASE}/auth/register?${query}`, {
+    method: "POST",
   });
 
   return handleResponse(res);
