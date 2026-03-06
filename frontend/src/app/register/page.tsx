@@ -28,38 +28,56 @@ export default function RegisterPage() {
     setLoading(true);
 
     try {
-      const url =
-        `${API_BASE}/auth/register?workspace_name=${encodeURIComponent(workspace)}` +
-        `&email=${encodeURIComponent(email)}` +
-        `&password=${encodeURIComponent(password)}`;
+      const cleanWorkspace = workspace.trim();
+      const cleanEmail = email.trim().toLowerCase();
+      const cleanPassword = password;
 
-      console.log("Registering with URL:", url);
-      console.log("API_BASE:", API_BASE);
+      if (!cleanWorkspace) {
+        throw new Error("Workspace name is required");
+      }
+
+      if (!cleanEmail) {
+        throw new Error("Email is required");
+      }
+
+      if (cleanPassword.length < 8) {
+        throw new Error("Password must be at least 8 characters");
+      }
+
+      const url =
+        `${API_BASE}/auth/register?workspace_name=${encodeURIComponent(cleanWorkspace)}` +
+        `&email=${encodeURIComponent(cleanEmail)}` +
+        `&password=${encodeURIComponent(cleanPassword)}`;
 
       const res = await fetch(url, { method: "POST" });
-
-      const contentType = res.headers.get("content-type") || "";
       const text = await res.text();
 
       let data: any = null;
-
-      if (contentType.includes("application/json")) {
-        data = JSON.parse(text);
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        data = null;
       }
 
       if (!res.ok) {
         throw new Error(
           data?.detail ||
-            `Register failed (${res.status}). Response: ${text.slice(0, 120)}`
+            data?.message ||
+            text ||
+            `Register failed (${res.status})`
         );
       }
 
+      if (!data?.access_token) {
+        throw new Error("Register succeeded but no access token was returned");
+      }
+
       setToken(data.access_token);
-      localStorage.setItem("mm_role", data.user.role);
+      localStorage.setItem("mm_role", data?.user?.role || "admin");
 
       router.push("/dashboard/settings");
     } catch (e: any) {
-      setErr(e.message || "Register failed");
+      setErr(e?.message || "Register failed");
     } finally {
       setLoading(false);
     }
@@ -84,6 +102,7 @@ export default function RegisterPage() {
                 placeholder="Acme Inc."
               />
             </div>
+
             <div className="space-y-2">
               <Label>Admin email</Label>
               <Input
@@ -92,6 +111,7 @@ export default function RegisterPage() {
                 placeholder="admin@acme.com"
               />
             </div>
+
             <div className="space-y-2">
               <Label>Password</Label>
               <Input
@@ -104,7 +124,11 @@ export default function RegisterPage() {
 
             {err ? <div className="text-sm text-red-600">{err}</div> : null}
 
-            <Button onClick={onSubmit} disabled={loading} className="w-full rounded-xl">
+            <Button
+              onClick={onSubmit}
+              disabled={loading}
+              className="w-full rounded-xl"
+            >
               {loading ? "Creating..." : "Create workspace"}
             </Button>
 
