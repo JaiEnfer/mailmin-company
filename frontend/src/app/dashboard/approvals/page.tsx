@@ -289,7 +289,7 @@ export default function ApprovalsPage() {
         <div>
           <div className="text-2xl font-semibold tracking-tight">Approvals</div>
           <div className="text-sm text-muted-foreground">
-            Review what MailMind plans to do before it executes.
+            Review what Replynto plans to do before it executes.
           </div>
         </div>
 

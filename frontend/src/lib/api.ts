@@ -12,31 +12,45 @@ export function getToken() {
   return localStorage.getItem("mm_token");
 }
 
-function getErrorMessage(data: any, status: number) {
+function parseMaybeJson(text: string) {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function getErrorMessage(data: any, text: string, status: number) {
   if (typeof data?.detail === "string") return data.detail;
   if (data?.detail) return JSON.stringify(data.detail);
   if (typeof data?.message === "string") return data.message;
+  if (text) return text;
   return `Request failed (${status})`;
+}
+
+async function handleResponse(res: Response) {
+  const text = await res.text();
+  const data = parseMaybeJson(text);
+
+  if (!res.ok) {
+    throw new Error(getErrorMessage(data, text, res.status));
+  }
+
+  return data;
 }
 
 export async function apiGet(path: string) {
   const token = getToken();
 
   const res = await fetch(`${API_BASE}${path}`, {
+    method: "GET",
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
   });
 
-  const text = await res.text();
-  let data: any = {};
-  try {
-    data = JSON.parse(text);
-  } catch {}
-
-  if (!res.ok) throw new Error(getErrorMessage(data, res.status));
-
-  return data;
+  return handleResponse(res);
 }
 
 export async function apiPost(path: string, body?: any) {
@@ -48,18 +62,10 @@ export async function apiPost(path: string, body?: any) {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: body ? JSON.stringify(body) : undefined,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
   });
 
-  const text = await res.text();
-  let data: any = {};
-  try {
-    data = JSON.parse(text);
-  } catch {}
-
-  if (!res.ok) throw new Error(getErrorMessage(data, res.status));
-
-  return data;
+  return handleResponse(res);
 }
 
 export async function apiPostQuery(path: string, params: Record<string, any>) {
@@ -73,13 +79,5 @@ export async function apiPostQuery(path: string, params: Record<string, any>) {
     },
   });
 
-  const text = await res.text();
-  let data: any = {};
-  try {
-    data = JSON.parse(text);
-  } catch {}
-
-  if (!res.ok) throw new Error(getErrorMessage(data, res.status));
-
-  return data;
+  return handleResponse(res);
 }

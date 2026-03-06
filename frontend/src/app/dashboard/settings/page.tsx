@@ -257,7 +257,7 @@ export default function SettingsPage() {
         <div>
           <div className="text-2xl font-semibold tracking-tight">Settings</div>
           <div className="text-sm text-muted-foreground">
-            Configure MailMind behavior for your workspace.
+            Configure Replynto behavior for your workspace.
           </div>
         </div>
         <Badge variant="secondary" className="rounded-xl">
@@ -280,7 +280,7 @@ export default function SettingsPage() {
 
         <CardContent className="space-y-3">
           <div className="text-sm text-muted-foreground">
-            Connect Gmail + Calendar so MailMind can sync unread emails and book meetings.
+            Connect Gmail + Calendar so Replynto can sync unread emails and book meetings.
           </div>
 
           {googleConnected ? (
@@ -442,7 +442,7 @@ export default function SettingsPage() {
                       onChange={(e) => setWs({ ...ws, signature_style: e.target.value as any })}
                       disabled={!canEdit}
                     >
-                      <option value="team">Team (MailMind)</option>
+                      <option value="team">Team (Replynto)</option>
                       <option value="name">Named sender</option>
                       <option value="minimal">Minimal</option>
                     </select>

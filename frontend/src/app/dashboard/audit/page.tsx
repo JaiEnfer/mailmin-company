@@ -43,7 +43,7 @@ export default function AuditPage() {
         <div>
           <div className="text-2xl font-semibold tracking-tight">Audit Log</div>
           <div className="text-sm text-muted-foreground">
-            A tamper-evident history of what MailMind suggested and executed.
+            A tamper-evident history of what Replynto suggested and executed.
           </div>
         </div>
         <Button variant="secondary" className="rounded-xl" onClick={load}>

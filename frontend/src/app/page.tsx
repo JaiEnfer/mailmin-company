@@ -93,7 +93,7 @@ export default function LoginPage() {
           </Card>
 
           <div className="rounded-2xl border bg-card p-6 shadow-sm">
-            <div className="text-sm text-muted-foreground">MailMind</div>
+            <div className="text-sm text-muted-foreground">Replynto</div>
             <div className="mt-2 text-3xl font-semibold tracking-tight">
               Your AI employee for email + tasks
             </div>

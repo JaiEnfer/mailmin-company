@@ -30,7 +30,7 @@ export default function DashboardHome() {
         <div>
           <div className="text-2xl font-semibold tracking-tight">Overview</div>
           <div className="text-sm text-muted-foreground">
-            A quick snapshot of what MailMind is doing for your workspace.
+            A quick snapshot of what Replynto is doing for your workspace.
           </div>
         </div>
         <Badge variant="secondary" className="w-fit rounded-xl">
@@ -72,7 +72,7 @@ export default function DashboardHome() {
 
       <Card className="rounded-2xl shadow-sm">
         <CardHeader>
-          <CardTitle>What MailMind does</CardTitle>
+          <CardTitle>What Replynto does</CardTitle>
         </CardHeader>
         <CardContent className="text-sm text-muted-foreground">
           Sync unread emails → draft replies → detect actions → queue approvals → execute approved actions and log everything.

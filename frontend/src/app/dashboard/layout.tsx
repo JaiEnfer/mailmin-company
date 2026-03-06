@@ -37,7 +37,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         <aside className="rounded-2xl border bg-card p-4 shadow-sm">
           <div className="flex items-center justify-between">
             <div>
-              <div className="text-lg font-semibold leading-tight">MailMind</div>
+              <div className="text-lg font-semibold leading-tight">Replynto</div>
               <div className="text-xs text-muted-foreground">Ops Dashboard</div>
             </div>
             <Badge className="rounded-xl">Beta</Badge>
@@ -73,7 +73,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         <main className="space-y-4">
           {children}
           <div className="pb-8 text-center text-xs text-muted-foreground">
-            © {new Date().getFullYear()} MailMind — Automate email & tasks safely.
+            © {new Date().getFullYear()} Replynto — Automate email & tasks safely.
           </div>
         </main>
       </div>
