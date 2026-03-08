@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import json
 
@@ -25,6 +26,10 @@ from app.services.store import create_approval, set_approval_status, log_action
 from app.services.signature import build_signature
 
 router = APIRouter(prefix="/mailmind", tags=["mailmind"])
+
+
+class DraftUpdateBody(BaseModel):
+    draft_reply: str
 
 
 def _get_email_text(msg: dict) -> str:
@@ -359,6 +364,51 @@ def approvals_list(status: str | None = None, limit: int = 50, db: Session = Dep
             }
             for a in rows
         ]
+    }
+
+
+@router.post("/approvals/{approval_id}/draft")
+def update_draft(
+    approval_id: int,
+    body: DraftUpdateBody,
+    db: Session = Depends(get_db),
+    user: dict = Depends(require_role("admin", "approver")),
+):
+    workspace_id = int(user["workspace_id"])
+
+    a = (
+        db.query(Approval)
+        .filter(Approval.id == approval_id, Approval.workspace_id == workspace_id)
+        .first()
+    )
+    if not a:
+        raise HTTPException(status_code=404, detail="Approval not found")
+
+    if a.status in ("sent", "rejected", "no_reply"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot edit draft when approval status is {a.status}",
+        )
+
+    new_draft = (body.draft_reply or "").strip()
+    if not new_draft:
+        raise HTTPException(status_code=400, detail="Draft reply cannot be empty")
+
+    a.draft_reply = new_draft
+    db.commit()
+    db.refresh(a)
+
+    log_action(
+        db,
+        "UPDATED_DRAFT_REPLY",
+        {"approval_id": a.id},
+        workspace_id=workspace_id,
+    )
+
+    return {
+        "id": a.id,
+        "status": a.status,
+        "draft_reply": a.draft_reply,
     }
 
 

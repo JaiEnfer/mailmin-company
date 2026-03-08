@@ -82,6 +82,10 @@ export default function ApprovalsPage() {
   const [role, setRole] = useState<string>("viewer");
   const canAct = role === "admin" || role === "approver";
 
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [draftEdits, setDraftEdits] = useState<Record<number, string>>({});
+  const [savingDraftId, setSavingDraftId] = useState<number | null>(null);
+
   useEffect(() => setMounted(true), []);
 
   useEffect(() => {
@@ -96,7 +100,14 @@ export default function ApprovalsPage() {
     setLoading(true);
     try {
       const data = await apiGet("/mailmind/approvals?limit=200");
-      setItems(data.items || []);
+      const loadedItems = data.items || [];
+      setItems(loadedItems);
+
+      const nextDraftEdits: Record<number, string> = {};
+      for (const item of loadedItems) {
+        nextDraftEdits[item.id] = item.draft_reply || "";
+      }
+      setDraftEdits(nextDraftEdits);
     } catch (e: any) {
       setErr(e?.message || "Failed to load approvals");
     } finally {
@@ -135,6 +146,8 @@ export default function ApprovalsPage() {
       await loadAll();
     } catch (e: any) {
       setErr(e?.message || "Execute action failed");
+    } finally {
+      setEditingId(null);
     }
   }
 
@@ -145,6 +158,8 @@ export default function ApprovalsPage() {
       await loadAll();
     } catch (e: any) {
       setErr(e?.message || "Reply failed");
+    } finally {
+      setEditingId(null);
     }
   }
 
@@ -155,6 +170,42 @@ export default function ApprovalsPage() {
       await loadAll();
     } catch (e: any) {
       setErr(e?.message || "No-reply failed");
+    } finally {
+      setEditingId(null);
+    }
+  }
+
+  function startEditing(a: Approval) {
+    setErr(null);
+    setEditingId(a.id);
+    setDraftEdits((prev) => ({
+      ...prev,
+      [a.id]: a.draft_reply || "",
+    }));
+  }
+
+  function cancelEditing(a: Approval) {
+    setEditingId(null);
+    setDraftEdits((prev) => ({
+      ...prev,
+      [a.id]: a.draft_reply || "",
+    }));
+  }
+
+  async function saveDraft(id: number) {
+    setErr(null);
+    setSavingDraftId(id);
+
+    try {
+      await apiPost(`/mailmind/approvals/${id}/draft`, {
+        draft_reply: draftEdits[id] || "",
+      });
+      await loadAll();
+      setEditingId(null);
+    } catch (e: any) {
+      setErr(e?.message || "Save draft failed");
+    } finally {
+      setSavingDraftId(null);
     }
   }
 
@@ -169,14 +220,10 @@ export default function ApprovalsPage() {
     const pending = items.filter((x) => statusOf(x) === "pending");
     const approved = items.filter((x) => statusOf(x) === "approved");
 
-    // Action executed if:
-    // - backend explicitly says executed
-    // - OR it was sent and had a real action attached
     const executed = items.filter(
       (x) => statusOf(x) === "executed" || (statusOf(x) === "sent" && hasRealAction(x))
     );
 
-    // Pure replies: sent items with no action
     const sent = items.filter(
       (x) => statusOf(x) === "sent" && !hasRealAction(x)
     );
@@ -202,6 +249,8 @@ export default function ApprovalsPage() {
     const status = (a.status || "").toLowerCase();
     const action = (a.action_type || "").toLowerCase().trim();
     const hasRealAction = !!action && action !== "none";
+    const isEditing = editingId === a.id;
+    const canEditDraft = canAct && status !== "sent" && status !== "no_reply" && status !== "rejected";
 
     return (
       <div key={a.id} className="rounded-2xl border p-4">
@@ -222,6 +271,16 @@ export default function ApprovalsPage() {
 
           {canAct ? (
             <div className="flex flex-wrap gap-2">
+              {canEditDraft && !isEditing ? (
+                <Button
+                  className="rounded-xl"
+                  variant="secondary"
+                  onClick={() => startEditing(a)}
+                >
+                  Edit draft
+                </Button>
+              ) : null}
+
               {status === "pending" ? (
                 <Button className="rounded-xl" onClick={() => approve(a.id)}>
                   Approve
@@ -270,10 +329,45 @@ export default function ApprovalsPage() {
         <Separator className="my-3" />
 
         <div className="text-sm">
-          <div className="text-xs font-medium text-muted-foreground">Draft reply</div>
-          <pre className="mt-2 whitespace-pre-wrap rounded-xl bg-muted/40 p-3 text-sm">
-            {a.draft_reply || ""}
-          </pre>
+          <div className="mb-2 text-xs font-medium text-muted-foreground">Draft reply</div>
+
+          {isEditing ? (
+            <div className="space-y-3">
+              <textarea
+                className="min-h-[180px] w-full rounded-xl border bg-background p-3 text-sm outline-none"
+                value={draftEdits[a.id] ?? ""}
+                onChange={(e) =>
+                  setDraftEdits((prev) => ({
+                    ...prev,
+                    [a.id]: e.target.value,
+                  }))
+                }
+              />
+
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  className="rounded-xl"
+                  onClick={() => saveDraft(a.id)}
+                  disabled={savingDraftId === a.id}
+                >
+                  {savingDraftId === a.id ? "Saving..." : "Save draft"}
+                </Button>
+
+                <Button
+                  className="rounded-xl"
+                  variant="secondary"
+                  onClick={() => cancelEditing(a)}
+                  disabled={savingDraftId === a.id}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <pre className="mt-2 whitespace-pre-wrap rounded-xl bg-muted/40 p-3 text-sm">
+              {a.draft_reply || ""}
+            </pre>
+          )}
         </div>
       </div>
     );
