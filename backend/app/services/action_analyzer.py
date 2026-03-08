@@ -27,19 +27,34 @@ def _text_from_msg(msg: dict) -> str:
     ]
     return "\n".join(p for p in parts if p).strip()
 
-
 def _extract_timezone(text: str) -> str:
     lowered = (text or "").lower()
 
-    if "europe/berlin" in lowered or "berlin time" in lowered or "cet" in lowered or "cest" in lowered:
+    if (
+        "europe/berlin" in lowered
+        or "berlin time" in lowered
+        or re.search(r"\b(cet|cest)\b", lowered)
+    ):
         return "Europe/Berlin"
-    if "utc" in lowered or "gmt" in lowered:
+
+    if re.search(r"\b(utc|gmt)\b", lowered):
         return "UTC"
-    if "asia/karachi" in lowered or "pkt" in lowered:
+
+    if "asia/karachi" in lowered or re.search(r"\bpkt\b", lowered):
         return "Asia/Karachi"
-    if "america/new_york" in lowered or "new york time" in lowered or "est" in lowered or "edt" in lowered:
+
+    if (
+        "america/new_york" in lowered
+        or "new york time" in lowered
+        or re.search(r"\b(est|edt)\b", lowered)
+    ):
         return "America/New_York"
-    if "america/los_angeles" in lowered or "pacific time" in lowered or "pst" in lowered or "pdt" in lowered:
+
+    if (
+        "america/los_angeles" in lowered
+        or "pacific time" in lowered
+        or re.search(r"\b(pst|pdt)\b", lowered)
+    ):
         return "America/Los_Angeles"
 
     return DEFAULT_TIMEZONE
@@ -68,6 +83,7 @@ def _extract_time(text: str) -> Optional[tuple[int, int]]:
     if not text:
         return None
 
+    # 14:00 / 2:30pm / 2:30 pm
     m = re.search(r"\b(\d{1,2}):(\d{2})\s*(am|pm)?\b", text, flags=re.IGNORECASE)
     if m:
         hour = int(m.group(1))
@@ -79,8 +95,10 @@ def _extract_time(text: str) -> Optional[tuple[int, int]]:
         if ampm == "am" and hour == 12:
             hour = 0
 
-        return hour, minute
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return hour, minute
 
+    # 2 pm / 2pm
     m = re.search(r"\b(\d{1,2})\s*(am|pm)\b", text, flags=re.IGNORECASE)
     if m:
         hour = int(m.group(1))
@@ -92,7 +110,8 @@ def _extract_time(text: str) -> Optional[tuple[int, int]]:
         if ampm == "am" and hour == 12:
             hour = 0
 
-        return hour, minute
+        if 0 <= hour <= 23:
+            return hour, minute
 
     return None
 
@@ -109,11 +128,16 @@ def _extract_date(text: str, timezone: str) -> Optional[datetime]:
     if "today" in lowered:
         return datetime(now.year, now.month, now.day, tzinfo=tz)
 
+    # ISO date: 2026-03-09
     m = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", text)
     if m:
         return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=tz)
 
-    m = re.search(r"\b([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})\b", text, flags=re.IGNORECASE)
+    # Remove ordinal suffixes: 9th -> 9, 1st -> 1
+    cleaned = re.sub(r"\b(\d{1,2})(st|nd|rd|th)\b", r"\1", text, flags=re.IGNORECASE)
+
+    # March 9, 2026 / Mar 9, 2026
+    m = re.search(r"\b([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})\b", cleaned, flags=re.IGNORECASE)
     if m:
         raw = f"{m.group(1)} {m.group(2)}, {m.group(3)}"
         for fmt in ("%B %d, %Y", "%b %d, %Y"):
@@ -123,7 +147,23 @@ def _extract_date(text: str, timezone: str) -> Optional[datetime]:
             except ValueError:
                 pass
 
-    m = re.search(r"\b(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})\b", text, flags=re.IGNORECASE)
+    # 9 March 2026 / 9 Mar 2026
+    m = re.search(r"\b(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})\b", cleaned, flags=re.IGNORECASE)
+    if m:
+        raw = f"{m.group(1)} {m.group(2)} {m.group(3)}"
+        for fmt in ("%d %B %Y", "%d %b %Y"):
+            try:
+                dt = datetime.strptime(raw, fmt)
+                return datetime(dt.year, dt.month, dt.day, tzinfo=tz)
+            except ValueError:
+                pass
+
+    # Monday 9 March 2026 / Monday 9th March 2026
+    m = re.search(
+        r"\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})\b",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
     if m:
         raw = f"{m.group(1)} {m.group(2)} {m.group(3)}"
         for fmt in ("%d %B %Y", "%d %b %Y"):
@@ -180,18 +220,16 @@ def analyze_email_for_action(classification: dict, msg: dict) -> Dict[str, Any]:
             "end_iso": end_dt.isoformat(),
             "timezone": timezone,
             "attendees": _extract_attendees(msg),
-            "description": "Proposed by MailMind based on email intent.",
+            "description": "Proposed by Replynto based on email intent.",
         }
 
         print("ACTION ANALYZER TIME:", payload)
-
         return {"action_type": "calendar_create", "payload": payload}
 
-    # Fallback so booking still works in MVP
-    fallback_payload = build_meeting_payload(timezone=timezone)
-    payload = json.loads(fallback_payload)
-    payload["title"] = _extract_title(msg)
+    # Do not auto-book a fake fallback time if the email time/date was not understood.
+    print("ACTION ANALYZER: meeting intent detected but date/time could not be extracted", {
+        "timezone": timezone,
+        "text": text,
+    })
 
-    print("ACTION ANALYZER FALLBACK:", payload)
-
-    return {"action_type": "calendar_create", "payload": payload}
+    return {"action_type": "none", "payload": None}

@@ -64,7 +64,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
           <div className="mt-4 rounded-xl bg-muted/40 p-3 text-xs text-muted-foreground">
             <div className="font-medium text-foreground">Workspace</div>
-            <div className="mt-1">DemoCompany</div>
+            <div className="mt-1">Replynto</div>
             <div className="mt-2">Mode: Approval-first</div>
           </div>
         </aside>
