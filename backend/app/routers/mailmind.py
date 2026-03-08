@@ -125,9 +125,6 @@ def mailmind_stats(db: Session = Depends(get_db), user: dict = Depends(get_curre
         .filter(Approval.workspace_id == workspace_id, Approval.status == "sent")
         .count()
     )
-
-    # Count approvals whose action was actually executed,
-    # even if their final status later became "sent".
     executed = (
         db.query(Approval)
         .filter(
@@ -137,7 +134,6 @@ def mailmind_stats(db: Session = Depends(get_db), user: dict = Depends(get_curre
         )
         .count()
     )
-
     noreply = (
         db.query(Approval)
         .filter(Approval.workspace_id == workspace_id, Approval.status == "no_reply")
@@ -151,6 +147,7 @@ def mailmind_stats(db: Session = Depends(get_db), user: dict = Depends(get_curre
         "executed": executed,
         "no_reply": noreply,
     }
+
 
 @router.post("/sync-unread")
 def sync_unread(
@@ -172,49 +169,41 @@ def sync_unread(
 
     created = 0
     skipped_existing = 0
-    skipped_duplicate_thread = 0
+    skipped_older_in_thread = 0
     approval_ids: list[int] = []
     message_ids: list[str] = []
 
-    # Prevent multiple approvals in one sync run for the same thread
-    seen_thread_ids: set[str] = set()
+    # Keep only the newest unread message per thread
+    newest_by_thread: dict[str, dict] = {}
 
     for it in (unread_items or []):
         message_id = (it or {}).get("id")
         if not message_id:
             continue
 
-        msg = get_message_metadata(db, workspace_id, message_id)
-        msg["snippet"] = redact_pii(msg.get("snippet"))
-
-        thread_id = (msg.get("thread_id") or msg.get("threadId") or "").strip()
+        thread_id = ((it or {}).get("thread_id") or (it or {}).get("threadId") or "").strip()
         if not thread_id:
             thread_id = f"msg:{message_id}"
 
-        if thread_id in seen_thread_ids:
-            skipped_duplicate_thread += 1
+        current_ts = int((it or {}).get("internalDate") or 0)
+        existing = newest_by_thread.get(thread_id)
+
+        if not existing:
+            newest_by_thread[thread_id] = it
             continue
 
-        seen_thread_ids.add(thread_id)
+        existing_ts = int(existing.get("internalDate") or 0)
+        if current_ts >= existing_ts:
+            newest_by_thread[thread_id] = it
+
+    for thread_id, it in newest_by_thread.items():
+        message_id = (it or {}).get("id")
+        if not message_id:
+            continue
+
         message_ids.append(message_id)
 
-        # Skip if we already have an approval for this thread that is still active
-        existing_thread_approval = (
-            db.query(Approval)
-            .filter(
-                Approval.workspace_id == workspace_id,
-                Approval.thread_id == thread_id,
-                Approval.status.in_(["pending", "approved", "sent", "executed", "no_reply"]),
-            )
-            .order_by(Approval.id.desc())
-            .first()
-        )
-
-        if existing_thread_approval:
-            skipped_existing += 1
-            continue
-
-        # Fallback: old rows may only match by message_id
+        # Skip only if THIS EXACT MESSAGE has already been processed
         existing_message_approval = (
             db.query(Approval)
             .filter(
@@ -227,6 +216,9 @@ def sync_unread(
         if existing_message_approval:
             skipped_existing += 1
             continue
+
+        msg = get_message_metadata(db, workspace_id, message_id)
+        msg["snippet"] = redact_pii(msg.get("snippet"))
 
         email_text = _get_email_text(msg)
 
@@ -278,6 +270,8 @@ def sync_unread(
             workspace_id=workspace_id,
         )
 
+    skipped_older_in_thread = max(0, len(unread_items or []) - len(newest_by_thread))
+
     log_action(
         db,
         "SYNC_UNREAD",
@@ -285,7 +279,7 @@ def sync_unread(
             "fetched": len(unread_items or []),
             "created": created,
             "skipped_existing": skipped_existing,
-            "skipped_duplicate_thread": skipped_duplicate_thread,
+            "skipped_older_in_thread": skipped_older_in_thread,
         },
         workspace_id=workspace_id,
     )
@@ -294,7 +288,7 @@ def sync_unread(
         "fetched": len(unread_items or []),
         "created": created,
         "skipped_existing": skipped_existing,
-        "skipped_duplicate_thread": skipped_duplicate_thread,
+        "skipped_older_in_thread": skipped_older_in_thread,
         "approval_ids": approval_ids,
         "message_ids": message_ids,
     }
@@ -399,13 +393,13 @@ def send_and_execute(
             )
 
         print("SEND CALENDAR PAYLOAD:", {
-                "title": fields["title"],
-                "start_iso": fields["start_iso"],
-                "end_iso": fields["end_iso"],
-                "timezone": fields["timezone"],
-                "attendees": fields["attendees"],
-            })
-            
+            "title": fields["title"],
+            "start_iso": fields["start_iso"],
+            "end_iso": fields["end_iso"],
+            "timezone": fields["timezone"],
+            "attendees": fields["attendees"],
+        })
+
         event = create_event(
             db=db,
             workspace_id=workspace_id,

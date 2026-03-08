@@ -46,6 +46,7 @@ def _extract_text_from_payload(payload: Dict[str, Any]) -> str:
             text = _extract_text_from_payload(part)
             if not text:
                 continue
+
             part_type = part.get("mimeType", "")
             if part_type == "text/plain":
                 plain_parts.append(text)
@@ -54,6 +55,7 @@ def _extract_text_from_payload(payload: Dict[str, Any]) -> str:
 
         if plain_parts:
             return "\n".join(p for p in plain_parts if p).strip()
+
         if html_parts:
             return "\n".join(p for p in html_parts if p).strip()
 
@@ -61,6 +63,14 @@ def _extract_text_from_payload(payload: Dict[str, Any]) -> str:
         return _decode_b64url(body_data)
 
     return ""
+
+
+def _headers_to_dict(msg: Dict[str, Any]) -> Dict[str, str]:
+    return {
+        h["name"]: h["value"]
+        for h in msg.get("payload", {}).get("headers", [])
+        if h.get("name")
+    }
 
 
 def list_unread(
@@ -93,16 +103,20 @@ def list_unread(
             metadataHeaders=["From", "To", "Subject", "Date", "Message-ID", "References"],
         ).execute()
 
-        headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
+        headers = _headers_to_dict(msg)
         results.append(
             {
                 "id": msg.get("id"),
                 "threadId": msg.get("threadId"),
                 "thread_id": msg.get("threadId"),
                 "from": headers.get("From"),
+                "to": headers.get("To"),
                 "subject": headers.get("Subject"),
                 "date": headers.get("Date"),
+                "message_id_header": headers.get("Message-ID"),
+                "references": headers.get("References"),
                 "snippet": msg.get("snippet"),
+                "internalDate": msg.get("internalDate"),
             }
         )
 
@@ -117,7 +131,7 @@ def get_message_metadata(db: Session, workspace_id: int, message_id: str) -> Dic
         format="full",
     ).execute()
 
-    headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
+    headers = _headers_to_dict(msg)
     body_text = _extract_text_from_payload(msg.get("payload") or {})
 
     return {
@@ -132,7 +146,50 @@ def get_message_metadata(db: Session, workspace_id: int, message_id: str) -> Dic
         "references": headers.get("References"),
         "snippet": msg.get("snippet"),
         "body": body_text,
+        "internalDate": msg.get("internalDate"),
     }
+
+
+def read_thread_messages(
+    db: Session,
+    workspace_id: int,
+    thread_id: str,
+    max_messages: int = 10,
+) -> List[Dict[str, Any]]:
+    service = get_gmail_service(db, workspace_id)
+    thread = service.users().threads().get(
+        userId="me",
+        id=thread_id,
+        format="full",
+    ).execute()
+
+    messages = thread.get("messages", []) or []
+
+    normalized: List[Dict[str, Any]] = []
+    for msg in messages:
+        headers = _headers_to_dict(msg)
+        body_text = _extract_text_from_payload(msg.get("payload") or {})
+
+        normalized.append(
+            {
+                "id": msg.get("id"),
+                "threadId": msg.get("threadId"),
+                "thread_id": msg.get("threadId"),
+                "from": headers.get("From"),
+                "to": headers.get("To"),
+                "subject": headers.get("Subject"),
+                "date": headers.get("Date"),
+                "message_id_header": headers.get("Message-ID"),
+                "references": headers.get("References"),
+                "snippet": msg.get("snippet"),
+                "body": body_text,
+                "internalDate": msg.get("internalDate"),
+                "labelIds": msg.get("labelIds", []) or [],
+            }
+        )
+
+    normalized.sort(key=lambda x: int(x.get("internalDate") or 0))
+    return normalized[-max_messages:]
 
 
 def get_message_reply_headers(db: Session, workspace_id: int, message_id: str) -> Dict[str, str]:
@@ -144,8 +201,7 @@ def get_message_reply_headers(db: Session, workspace_id: int, message_id: str) -
         metadataHeaders=["Message-ID", "References"],
     ).execute()
 
-    headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
-    return headers
+    return _headers_to_dict(msg)
 
 
 def send_email(
