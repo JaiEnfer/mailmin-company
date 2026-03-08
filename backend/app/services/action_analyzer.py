@@ -24,6 +24,38 @@ MONTH_PATTERN = (
     r"jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec"
 )
 
+CANCEL_PATTERNS = [
+    r"\bcancel\b",
+    r"\bcancelled\b",
+    r"\bcancel the meeting\b",
+    r"\bcancel the appointment\b",
+    r"\bcancel the call\b",
+    r"\bplease cancel\b",
+    r"\bcall off\b",
+    r"\bcall off the meeting\b",
+    r"\bdrop the meeting\b",
+    r"\bno need for the meeting\b",
+    r"\bno need for the call\b",
+]
+
+RESCHEDULE_PATTERNS = [
+    r"\breschedule\b",
+    r"\breschedule the meeting\b",
+    r"\breschedule the appointment\b",
+    r"\breschedule the call\b",
+    r"\bmove it\b",
+    r"\bmove the meeting\b",
+    r"\bmove the appointment\b",
+    r"\bmove the call\b",
+    r"\bchange the time\b",
+    r"\bchange the meeting\b",
+    r"\bchange the appointment\b",
+    r"\bchange the schedule\b",
+    r"\bpostpone\b",
+    r"\bpush it\b",
+    r"\bshift it\b",
+]
+
 
 def _safe_zoneinfo(timezone: str) -> ZoneInfo:
     try:
@@ -47,12 +79,8 @@ def _normalize_text_for_parsing(text: str) -> str:
 
     cleaned = text
 
-    # Normalize newlines/tabs to spaces
     cleaned = re.sub(r"[\t\r\n]+", " ", cleaned)
 
-    # Insert spaces between number and month name:
-    # 11March 2026 -> 11 March 2026
-    # 11thMarch 2026 -> 11th March 2026
     cleaned = re.sub(
         rf"\b(\d{{1,2}})(st|nd|rd|th)?(?=({MONTH_PATTERN})\b)",
         r"\1\2 ",
@@ -60,8 +88,6 @@ def _normalize_text_for_parsing(text: str) -> str:
         flags=re.IGNORECASE,
     )
 
-    # Insert spaces between weekday and numeric date:
-    # Monday11 March 2026 -> Monday 11 March 2026
     cleaned = re.sub(
         r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?=\d)",
         r"\1 ",
@@ -69,7 +95,6 @@ def _normalize_text_for_parsing(text: str) -> str:
         flags=re.IGNORECASE,
     )
 
-    # Remove duplicate spaces
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
 
     return cleaned
@@ -154,7 +179,6 @@ def _extract_time(text: str) -> Optional[tuple[int, int]]:
 
     cleaned = _normalize_text_for_parsing(text)
 
-    # 10:00 AM / 10:00AM / 14:00
     m = re.search(r"\b(\d{1,2}):(\d{2})\s*(am|pm)?\b", cleaned, flags=re.IGNORECASE)
     if m:
         hour = int(m.group(1))
@@ -175,7 +199,6 @@ def _extract_time(text: str) -> Optional[tuple[int, int]]:
         if 0 <= hour <= 23 and 0 <= minute <= 59:
             return hour, minute
 
-    # 10 AM / 2pm
     m = re.search(r"\b(\d{1,2})\s*(am|pm)\b", cleaned, flags=re.IGNORECASE)
     if m:
         hour = int(m.group(1))
@@ -217,7 +240,6 @@ def _extract_date(text: str, timezone: str) -> Optional[datetime]:
     if re.search(r"\btoday\b", lowered):
         return datetime(now.year, now.month, now.day, tzinfo=tz)
 
-    # next Monday, next Tuesday, etc.
     m = re.search(
         r"\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
         lowered,
@@ -226,7 +248,6 @@ def _extract_date(text: str, timezone: str) -> Optional[datetime]:
     if m:
         return _next_weekday(now, m.group(1))
 
-    # Monday, Tuesday, etc. (if no explicit date)
     m = re.search(
         r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
         lowered,
@@ -235,7 +256,6 @@ def _extract_date(text: str, timezone: str) -> Optional[datetime]:
     if m and not re.search(r"\b\d{4}\b", cleaned):
         return _next_weekday(now, m.group(1))
 
-    # ISO date: 2026-03-11
     m = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", cleaned)
     if m:
         try:
@@ -243,7 +263,6 @@ def _extract_date(text: str, timezone: str) -> Optional[datetime]:
         except ValueError:
             return None
 
-    # Remove ordinal suffixes: 11th -> 11
     cleaned_no_ordinals = re.sub(
         r"\b(\d{1,2})(st|nd|rd|th)\b",
         r"\1",
@@ -251,7 +270,6 @@ def _extract_date(text: str, timezone: str) -> Optional[datetime]:
         flags=re.IGNORECASE,
     )
 
-    # March 11, 2026 / Mar 11, 2026
     m = re.search(
         r"\b([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})\b",
         cleaned_no_ordinals,
@@ -266,7 +284,6 @@ def _extract_date(text: str, timezone: str) -> Optional[datetime]:
             except ValueError:
                 pass
 
-    # 11 March 2026 / 11 Mar 2026
     m = re.search(
         r"\b(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})\b",
         cleaned_no_ordinals,
@@ -281,7 +298,6 @@ def _extract_date(text: str, timezone: str) -> Optional[datetime]:
             except ValueError:
                 pass
 
-    # Monday 11 March 2026 / Monday, 11 March 2026
     m = re.search(
         rf"\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday),?\s+(\d{{1,2}})\s+([A-Za-z]+)\s+(\d{{4}})\b",
         cleaned_no_ordinals,
@@ -316,48 +332,97 @@ def _extract_title(msg: dict) -> str:
     return (msg.get("subject") or "").strip() or "Meeting"
 
 
+def _matches_any(text: str, patterns: list[str]) -> bool:
+    lowered = _normalize_text_for_parsing(text).lower()
+    return any(re.search(pattern, lowered, flags=re.IGNORECASE) for pattern in patterns)
+
+
 def analyze_email_for_action(classification: dict, msg: dict) -> Dict[str, Any]:
     label = (classification.get("label") or "").lower().strip()
-
-    if label not in ("meeting", "schedule", "call"):
-        return {"action_type": "none", "payload": None}
-
     text = _text_from_msg(msg)
     timezone = _extract_timezone(text)
     duration_minutes = _extract_duration_minutes(text)
     date_part = _extract_date(text, timezone)
     time_part = _extract_time(text)
 
-    if date_part and time_part:
-        tz = _safe_zoneinfo(timezone)
-        start_dt = datetime(
-            date_part.year,
-            date_part.month,
-            date_part.day,
-            time_part[0],
-            time_part[1],
-            tzinfo=tz,
-        )
-        end_dt = start_dt + timedelta(minutes=duration_minutes)
+    is_cancel = _matches_any(text, CANCEL_PATTERNS)
+    is_reschedule = _matches_any(text, RESCHEDULE_PATTERNS)
 
+    if is_cancel:
         payload = {
             "title": _extract_title(msg),
-            "start_iso": start_dt.isoformat(),
-            "end_iso": end_dt.isoformat(),
             "timezone": timezone,
-            "attendees": _extract_attendees(msg),
-            "description": "Proposed by Replynto based on email intent.",
+            "description": "Cancellation requested by Replynto based on email intent.",
         }
+        print("ACTION ANALYZER CANCEL:", payload)
+        return {"action_type": "calendar_cancel", "payload": payload}
 
-        print("ACTION ANALYZER TIME:", payload)
-        return {"action_type": "calendar_create", "payload": payload}
+    if is_reschedule:
+        if date_part and time_part:
+            tz = _safe_zoneinfo(timezone)
+            start_dt = datetime(
+                date_part.year,
+                date_part.month,
+                date_part.day,
+                time_part[0],
+                time_part[1],
+                tzinfo=tz,
+            )
+            end_dt = start_dt + timedelta(minutes=duration_minutes)
 
-    print(
-        "ACTION ANALYZER: meeting intent detected but date/time could not be extracted",
-        {
-            "timezone": timezone,
-            "text": text,
-        },
-    )
+            payload = {
+                "title": _extract_title(msg),
+                "start_iso": start_dt.isoformat(),
+                "end_iso": end_dt.isoformat(),
+                "timezone": timezone,
+                "attendees": _extract_attendees(msg),
+                "description": "Rescheduled by Replynto based on email intent.",
+            }
+
+            print("ACTION ANALYZER RESCHEDULE:", payload)
+            return {"action_type": "calendar_reschedule", "payload": payload}
+
+        print(
+            "ACTION ANALYZER: reschedule intent detected but date/time could not be extracted",
+            {
+                "timezone": timezone,
+                "text": text,
+            },
+        )
+        return {"action_type": "none", "payload": None}
+
+    if label in ("meeting", "schedule", "call"):
+        if date_part and time_part:
+            tz = _safe_zoneinfo(timezone)
+            start_dt = datetime(
+                date_part.year,
+                date_part.month,
+                date_part.day,
+                time_part[0],
+                time_part[1],
+                tzinfo=tz,
+            )
+            end_dt = start_dt + timedelta(minutes=duration_minutes)
+
+            payload = {
+                "title": _extract_title(msg),
+                "start_iso": start_dt.isoformat(),
+                "end_iso": end_dt.isoformat(),
+                "timezone": timezone,
+                "attendees": _extract_attendees(msg),
+                "description": "Proposed by Replynto based on email intent.",
+            }
+
+            print("ACTION ANALYZER CREATE:", payload)
+            return {"action_type": "calendar_create", "payload": payload}
+
+        print(
+            "ACTION ANALYZER: meeting intent detected but date/time could not be extracted",
+            {
+                "timezone": timezone,
+                "text": text,
+            },
+        )
+        return {"action_type": "none", "payload": None}
 
     return {"action_type": "none", "payload": None}

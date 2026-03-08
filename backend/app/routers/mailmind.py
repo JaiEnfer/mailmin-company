@@ -12,7 +12,11 @@ from app.integrations.gmail_client import (
     send_email,
     list_unread,
 )
-from app.integrations.calendar_client import create_event
+from app.integrations.calendar_client import (
+    create_event,
+    update_event,
+    cancel_event,
+)
 
 from app.models import Approval, Workspace
 from app.services.llm import classify_email, draft_reply
@@ -55,10 +59,46 @@ def _extract_calendar_fields(payload: dict, approval_subject: str = "") -> dict:
     }
 
 
+def _find_latest_thread_event_approval(
+    db: Session,
+    workspace_id: int,
+    thread_id: str | None,
+    exclude_approval_id: int | None = None,
+):
+    if not thread_id:
+        return None, None
+
+    rows = (
+        db.query(Approval)
+        .filter(
+            Approval.workspace_id == workspace_id,
+            Approval.thread_id == thread_id,
+            Approval.action_payload.isnot(None),
+        )
+        .order_by(Approval.id.desc())
+        .all()
+    )
+
+    for row in rows:
+        if exclude_approval_id and row.id == exclude_approval_id:
+            continue
+
+        try:
+            payload = json.loads(row.action_payload or "{}")
+        except Exception:
+            continue
+
+        if payload.get("event_id"):
+            return row, payload
+
+    return None, None
+
+
 def _rebuild_calendar_payload_from_message(
     db: Session,
     workspace_id: int,
     approval: Approval,
+    expected_action_type: str = "calendar_create",
 ) -> dict:
     if not approval.message_id:
         raise HTTPException(
@@ -80,17 +120,22 @@ def _rebuild_calendar_payload_from_message(
     rebuilt = analyze_email_for_action(classification, msg)
     print("REBUILT ACTION DEBUG:", rebuilt)
 
-    if (rebuilt.get("action_type") or "none") != "calendar_create":
+    if (rebuilt.get("action_type") or "none") != expected_action_type:
         raise HTTPException(
             status_code=400,
-            detail="Could not rebuild calendar action from the original email.",
+            detail=(
+                f"Could not rebuild {expected_action_type} action from the original email. "
+                f"Got action_type={(rebuilt.get('action_type') or 'none')!r}"
+            ),
         )
 
     rebuilt_payload = rebuilt.get("payload") or {}
     fields = _extract_calendar_fields(rebuilt_payload, approval.subject or "Meeting")
 
+    existing_payload = _load_action_payload(approval)
     approval.action_payload = json.dumps(
         {
+            **existing_payload,
             "title": fields["title"],
             "start_iso": fields["start_iso"],
             "end_iso": fields["end_iso"],
@@ -173,7 +218,6 @@ def sync_unread(
     approval_ids: list[int] = []
     message_ids: list[str] = []
 
-    # Keep only the newest unread message per thread
     newest_by_thread: dict[str, dict] = {}
 
     for it in (unread_items or []):
@@ -203,7 +247,6 @@ def sync_unread(
 
         message_ids.append(message_id)
 
-        # Skip only if THIS EXACT MESSAGE has already been processed
         existing_message_approval = (
             db.query(Approval)
             .filter(
@@ -374,7 +417,12 @@ def send_and_execute(
         fields = _extract_calendar_fields(payload, a.subject or "Meeting")
 
         if not fields["start_iso"] or not fields["end_iso"]:
-            fields = _rebuild_calendar_payload_from_message(db, workspace_id, a)
+            fields = _rebuild_calendar_payload_from_message(
+                db,
+                workspace_id,
+                a,
+                expected_action_type="calendar_create",
+            )
 
         if not fields["title"]:
             raise HTTPException(
@@ -392,7 +440,7 @@ def send_and_execute(
                 ),
             )
 
-        print("SEND CALENDAR PAYLOAD:", {
+        print("SEND CALENDAR CREATE PAYLOAD:", {
             "title": fields["title"],
             "start_iso": fields["start_iso"],
             "end_iso": fields["end_iso"],
@@ -418,6 +466,7 @@ def send_and_execute(
             payload["timezone"] = fields["timezone"]
             payload["attendees"] = fields["attendees"]
             payload["description"] = fields["description"]
+            payload["event_id"] = event.get("id")
             payload["event_link"] = event.get("htmlLink")
             a.action_payload = json.dumps(payload, ensure_ascii=False)
             db.commit()
@@ -432,6 +481,122 @@ def send_and_execute(
             db,
             "CALENDAR_EVENT_CREATED",
             {"approval_id": a.id, "event": event},
+            workspace_id=workspace_id,
+        )
+
+    elif a.action_type == "calendar_reschedule":
+        payload = _load_action_payload(a)
+        fields = _extract_calendar_fields(payload, a.subject or "Meeting")
+
+        if not fields["start_iso"] or not fields["end_iso"]:
+            fields = _rebuild_calendar_payload_from_message(
+                db,
+                workspace_id,
+                a,
+                expected_action_type="calendar_reschedule",
+            )
+
+        prev_approval, prev_payload = _find_latest_thread_event_approval(
+            db=db,
+            workspace_id=workspace_id,
+            thread_id=a.thread_id,
+            exclude_approval_id=a.id,
+        )
+
+        if not prev_payload or not prev_payload.get("event_id"):
+            raise HTTPException(
+                status_code=400,
+                detail="No previous calendar event found to reschedule in this thread.",
+            )
+
+        print("SEND CALENDAR RESCHEDULE PAYLOAD:", {
+            "event_id": prev_payload.get("event_id"),
+            "title": fields["title"],
+            "start_iso": fields["start_iso"],
+            "end_iso": fields["end_iso"],
+            "timezone": fields["timezone"],
+            "attendees": fields["attendees"],
+        })
+
+        event = update_event(
+            db=db,
+            workspace_id=workspace_id,
+            event_id=prev_payload["event_id"],
+            title=fields["title"],
+            start_iso=fields["start_iso"],
+            end_iso=fields["end_iso"],
+            timezone=fields["timezone"],
+            attendees=fields["attendees"],
+            description=fields["description"],
+        )
+
+        try:
+            payload["title"] = fields["title"]
+            payload["start_iso"] = fields["start_iso"]
+            payload["end_iso"] = fields["end_iso"]
+            payload["timezone"] = fields["timezone"]
+            payload["attendees"] = fields["attendees"]
+            payload["description"] = fields["description"]
+            payload["event_id"] = event.get("id")
+            payload["event_link"] = event.get("htmlLink")
+            a.action_payload = json.dumps(payload, ensure_ascii=False)
+            db.commit()
+            db.refresh(a)
+        except Exception:
+            pass
+
+        if event and event.get("htmlLink"):
+            extra_note = f"\n\nCalendar event rescheduled: {event.get('htmlLink')}\n"
+
+        log_action(
+            db,
+            "CALENDAR_EVENT_RESCHEDULED",
+            {"approval_id": a.id, "event": event, "previous_approval_id": prev_approval.id if prev_approval else None},
+            workspace_id=workspace_id,
+        )
+
+    elif a.action_type == "calendar_cancel":
+        payload = _load_action_payload(a)
+
+        prev_approval, prev_payload = _find_latest_thread_event_approval(
+            db=db,
+            workspace_id=workspace_id,
+            thread_id=a.thread_id,
+            exclude_approval_id=a.id,
+        )
+
+        if not prev_payload or not prev_payload.get("event_id"):
+            raise HTTPException(
+                status_code=400,
+                detail="No previous calendar event found to cancel in this thread.",
+            )
+
+        print("SEND CALENDAR CANCEL PAYLOAD:", {
+            "event_id": prev_payload.get("event_id"),
+            "thread_id": a.thread_id,
+        })
+
+        event = cancel_event(
+            db=db,
+            workspace_id=workspace_id,
+            event_id=prev_payload["event_id"],
+        )
+
+        try:
+            payload["cancelled_event_id"] = prev_payload["event_id"]
+            payload["cancelled_event_link"] = prev_payload.get("event_link")
+            a.action_payload = json.dumps(payload, ensure_ascii=False)
+            db.commit()
+            db.refresh(a)
+        except Exception:
+            pass
+
+        extra_note = "\n\nThe previous calendar event has been cancelled.\n"
+
+        log_action(
+            db,
+            "CALENDAR_EVENT_CANCELLED",
+            {"approval_id": a.id, "event": event, "previous_approval_id": prev_approval.id if prev_approval else None},
             workspace_id=workspace_id,
         )
 
@@ -488,6 +653,8 @@ def send_reply(approval_id: int, db: Session = Depends(get_db), user: dict = Dep
             payload = json.loads(a.action_payload)
             if payload.get("event_link"):
                 extra_note = f"\n\nCalendar event created: {payload['event_link']}\n"
+            elif payload.get("cancelled_event_id"):
+                extra_note = "\n\nThe previous calendar event has been cancelled.\n"
         except Exception:
             pass
 
