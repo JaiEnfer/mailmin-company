@@ -216,11 +216,15 @@ def cancel_event(
 
     print("Google Calendar cancel_event:", {"event_id": event_id})
 
-    cancelled = service.events().patch(
+    service.events().delete(
         calendarId="primary",
         eventId=event_id,
-        body={"status": "cancelled"},
         sendUpdates="all",
     ).execute()
 
-    return _normalize_event_response(cancelled)
+    return {
+        "id": event_id,
+        "htmlLink": None,
+        "status": "cancelled",
+        "summary": None,
+    }

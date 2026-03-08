@@ -54,6 +54,23 @@ RESCHEDULE_PATTERNS = [
     r"\bpostpone\b",
     r"\bpush it\b",
     r"\bshift it\b",
+    r"\binstead\b",
+    r"\bmake it\b",
+    r"\bhow about\b",
+    r"\bcan we do\b",
+    r"\bcan we make it\b",
+    r"\bcould we do\b",
+    r"\bcould we make it\b",
+    r"\bwould .* work\b",
+    r"\bnew time\b",
+    r"\bnew date\b",
+]
+
+CREATE_HINT_PATTERNS = [
+    r"\bmeeting\b",
+    r"\bschedule\b",
+    r"\bcall\b",
+    r"\bappointment\b",
 ]
 
 
@@ -64,12 +81,53 @@ def _safe_zoneinfo(timezone: str) -> ZoneInfo:
         return ZoneInfo("UTC")
 
 
-def _text_from_msg(msg: dict) -> str:
-    parts = [
-        msg.get("subject") or "",
-        msg.get("snippet") or "",
-        msg.get("body") or "",
+def _latest_reply_text(text: str) -> str:
+    """
+    Keep only the newest visible reply content and ignore quoted thread history.
+    """
+    if not text:
+        return ""
+
+    lines = text.splitlines()
+    kept: list[str] = []
+
+    stop_patterns = [
+        r"^\s*on .+ wrote:\s*$",
+        r"^\s*from:\s+.*$",
+        r"^\s*sent:\s+.*$",
+        r"^\s*to:\s+.*$",
+        r"^\s*subject:\s+.*$",
+        r"^\s*>.*$",
+        r"^\s*-{2,}\s*original message\s*-{2,}\s*$",
     ]
+
+    for line in lines:
+        if any(re.match(pattern, line, flags=re.IGNORECASE) for pattern in stop_patterns):
+            break
+        kept.append(line)
+
+    cleaned = "\n".join(kept).strip()
+    return cleaned or text
+
+
+def _full_text_from_msg(msg: dict) -> str:
+    subject = (msg.get("subject") or "").strip()
+    snippet = (msg.get("snippet") or "").strip()
+    body = (msg.get("body") or "").strip()
+
+    parts = [subject, body, snippet]
+    return "\n".join(p for p in parts if p).strip()
+
+
+def _latest_text_from_msg(msg: dict) -> str:
+    subject = (msg.get("subject") or "").strip()
+    body = (msg.get("body") or "").strip()
+    snippet = (msg.get("snippet") or "").strip()
+
+    latest_body = _latest_reply_text(body) if body else ""
+    main_text = latest_body or snippet
+
+    parts = [subject, main_text]
     return "\n".join(p for p in parts if p).strip()
 
 
@@ -78,9 +136,9 @@ def _normalize_text_for_parsing(text: str) -> str:
         return ""
 
     cleaned = text
-
     cleaned = re.sub(r"[\t\r\n]+", " ", cleaned)
 
+    # 11March 2026 -> 11 March 2026
     cleaned = re.sub(
         rf"\b(\d{{1,2}})(st|nd|rd|th)?(?=({MONTH_PATTERN})\b)",
         r"\1\2 ",
@@ -88,6 +146,7 @@ def _normalize_text_for_parsing(text: str) -> str:
         flags=re.IGNORECASE,
     )
 
+    # Monday11 March 2026 -> Monday 11 March 2026
     cleaned = re.sub(
         r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?=\d)",
         r"\1 ",
@@ -96,7 +155,6 @@ def _normalize_text_for_parsing(text: str) -> str:
     )
 
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
-
     return cleaned
 
 
@@ -230,9 +288,73 @@ def _next_weekday(base_dt: datetime, weekday_name: str) -> datetime:
 def _extract_date(text: str, timezone: str) -> Optional[datetime]:
     tz = _safe_zoneinfo(timezone)
     now = datetime.now(tz)
+
     cleaned = _normalize_text_for_parsing(text)
     lowered = cleaned.lower()
 
+    # Prefer explicit dates first
+
+    # ISO date: 2026-03-11
+    m = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", cleaned)
+    if m:
+        try:
+            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=tz)
+        except ValueError:
+            return None
+
+    cleaned_no_ordinals = re.sub(
+        r"\b(\d{1,2})(st|nd|rd|th)\b",
+        r"\1",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+
+    # March 11, 2026 / Mar 11, 2026
+    m = re.search(
+        r"\b([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})\b",
+        cleaned_no_ordinals,
+        flags=re.IGNORECASE,
+    )
+    if m:
+        raw = f"{m.group(1)} {m.group(2)}, {m.group(3)}"
+        for fmt in ("%B %d, %Y", "%b %d, %Y"):
+            try:
+                dt = datetime.strptime(raw, fmt)
+                return datetime(dt.year, dt.month, dt.day, tzinfo=tz)
+            except ValueError:
+                pass
+
+    # Monday, 11 March 2026 / Monday 11 March 2026
+    m = re.search(
+        r"\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday),?\s+(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})\b",
+        cleaned_no_ordinals,
+        flags=re.IGNORECASE,
+    )
+    if m:
+        raw = f"{m.group(1)} {m.group(2)} {m.group(3)}"
+        for fmt in ("%d %B %Y", "%d %b %Y"):
+            try:
+                dt = datetime.strptime(raw, fmt)
+                return datetime(dt.year, dt.month, dt.day, tzinfo=tz)
+            except ValueError:
+                pass
+
+    # 11 March 2026 / 11 Mar 2026
+    m = re.search(
+        r"\b(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})\b",
+        cleaned_no_ordinals,
+        flags=re.IGNORECASE,
+    )
+    if m:
+        raw = f"{m.group(1)} {m.group(2)} {m.group(3)}"
+        for fmt in ("%d %B %Y", "%d %b %Y"):
+            try:
+                dt = datetime.strptime(raw, fmt)
+                return datetime(dt.year, dt.month, dt.day, tzinfo=tz)
+            except ValueError:
+                pass
+
+    # Relative dates after explicit ones
     if re.search(r"\btomorrow\b", lowered):
         target = now + timedelta(days=1)
         return datetime(target.year, target.month, target.day, tzinfo=tz)
@@ -248,69 +370,14 @@ def _extract_date(text: str, timezone: str) -> Optional[datetime]:
     if m:
         return _next_weekday(now, m.group(1))
 
-    m = re.search(
-        r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
-        lowered,
-        flags=re.IGNORECASE,
-    )
-    if m and not re.search(r"\b\d{4}\b", cleaned):
-        return _next_weekday(now, m.group(1))
-
-    m = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", cleaned)
-    if m:
-        try:
-            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=tz)
-        except ValueError:
-            return None
-
-    cleaned_no_ordinals = re.sub(
-        r"\b(\d{1,2})(st|nd|rd|th)\b",
-        r"\1",
-        cleaned,
-        flags=re.IGNORECASE,
-    )
-
-    m = re.search(
-        r"\b([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})\b",
-        cleaned_no_ordinals,
-        flags=re.IGNORECASE,
-    )
-    if m:
-        raw = f"{m.group(1)} {m.group(2)}, {m.group(3)}"
-        for fmt in ("%B %d, %Y", "%b %d, %Y"):
-            try:
-                dt = datetime.strptime(raw, fmt)
-                return datetime(dt.year, dt.month, dt.day, tzinfo=tz)
-            except ValueError:
-                pass
-
-    m = re.search(
-        r"\b(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})\b",
-        cleaned_no_ordinals,
-        flags=re.IGNORECASE,
-    )
-    if m:
-        raw = f"{m.group(1)} {m.group(2)} {m.group(3)}"
-        for fmt in ("%d %B %Y", "%d %b %Y"):
-            try:
-                dt = datetime.strptime(raw, fmt)
-                return datetime(dt.year, dt.month, dt.day, tzinfo=tz)
-            except ValueError:
-                pass
-
-    m = re.search(
-        rf"\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday),?\s+(\d{{1,2}})\s+([A-Za-z]+)\s+(\d{{4}})\b",
-        cleaned_no_ordinals,
-        flags=re.IGNORECASE,
-    )
-    if m:
-        raw = f"{m.group(1)} {m.group(2)} {m.group(3)}"
-        for fmt in ("%d %B %Y", "%d %b %Y"):
-            try:
-                dt = datetime.strptime(raw, fmt)
-                return datetime(dt.year, dt.month, dt.day, tzinfo=tz)
-            except ValueError:
-                pass
+    if not re.search(r"\b\d{4}\b", cleaned_no_ordinals):
+        m = re.search(
+            r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+            lowered,
+            flags=re.IGNORECASE,
+        )
+        if m:
+            return _next_weekday(now, m.group(1))
 
     return None
 
@@ -337,16 +404,52 @@ def _matches_any(text: str, patterns: list[str]) -> bool:
     return any(re.search(pattern, lowered, flags=re.IGNORECASE) for pattern in patterns)
 
 
+def _has_any_create_hint(text: str) -> bool:
+    lowered = _normalize_text_for_parsing(text).lower()
+    return any(re.search(pattern, lowered, flags=re.IGNORECASE) for pattern in CREATE_HINT_PATTERNS)
+
+
+def _extract_datetime_parts(msg: dict):
+    latest_text = _latest_text_from_msg(msg)
+    full_text = _full_text_from_msg(msg)
+
+    timezone = _extract_timezone(latest_text or full_text)
+    duration_minutes = _extract_duration_minutes(latest_text or full_text)
+
+    # Pass 1: latest visible reply
+    date_part = _extract_date(latest_text, timezone)
+    time_part = _extract_time(latest_text)
+
+    # Pass 2: fallback to full raw text if latest-text parsing missed something
+    if not date_part:
+        date_part = _extract_date(full_text, timezone)
+    if not time_part:
+        time_part = _extract_time(full_text)
+
+    return latest_text, full_text, timezone, duration_minutes, date_part, time_part
+
+
 def analyze_email_for_action(classification: dict, msg: dict) -> Dict[str, Any]:
     label = (classification.get("label") or "").lower().strip()
-    text = _text_from_msg(msg)
-    timezone = _extract_timezone(text)
-    duration_minutes = _extract_duration_minutes(text)
-    date_part = _extract_date(text, timezone)
-    time_part = _extract_time(text)
 
-    is_cancel = _matches_any(text, CANCEL_PATTERNS)
-    is_reschedule = _matches_any(text, RESCHEDULE_PATTERNS)
+    latest_text, full_text, timezone, duration_minutes, date_part, time_part = _extract_datetime_parts(msg)
+
+    normalized_subject = (msg.get("subject") or "").strip().lower()
+    is_reply_thread = normalized_subject.startswith("re:")
+
+    print("DATE/TIME DEBUG:", {
+        "latest_text": latest_text,
+        "full_text": full_text,
+        "timezone": timezone,
+        "date_part": date_part.isoformat() if date_part else None,
+        "time_part": time_part,
+        "subject": normalized_subject,
+    })
+
+    text_for_intent = latest_text or full_text
+
+    is_cancel = _matches_any(text_for_intent, CANCEL_PATTERNS)
+    is_reschedule = _matches_any(text_for_intent, RESCHEDULE_PATTERNS)
 
     if is_cancel:
         payload = {
@@ -357,7 +460,12 @@ def analyze_email_for_action(classification: dict, msg: dict) -> Dict[str, Any]:
         print("ACTION ANALYZER CANCEL:", payload)
         return {"action_type": "calendar_cancel", "payload": payload}
 
-    if is_reschedule:
+    should_treat_as_reschedule = (
+        is_reschedule
+        or (is_reply_thread and date_part and time_part)
+    )
+
+    if should_treat_as_reschedule:
         if date_part and time_part:
             tz = _safe_zoneinfo(timezone)
             start_dt = datetime(
@@ -386,12 +494,12 @@ def analyze_email_for_action(classification: dict, msg: dict) -> Dict[str, Any]:
             "ACTION ANALYZER: reschedule intent detected but date/time could not be extracted",
             {
                 "timezone": timezone,
-                "text": text,
+                "text_for_intent": text_for_intent,
             },
         )
         return {"action_type": "none", "payload": None}
 
-    if label in ("meeting", "schedule", "call"):
+    if label in ("meeting", "schedule", "call") or _has_any_create_hint(text_for_intent):
         if date_part and time_part:
             tz = _safe_zoneinfo(timezone)
             start_dt = datetime(
@@ -420,7 +528,7 @@ def analyze_email_for_action(classification: dict, msg: dict) -> Dict[str, Any]:
             "ACTION ANALYZER: meeting intent detected but date/time could not be extracted",
             {
                 "timezone": timezone,
-                "text": text,
+                "text_for_intent": text_for_intent,
             },
         )
         return {"action_type": "none", "payload": None}
