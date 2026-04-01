@@ -1,9 +1,9 @@
-# MailMind: 
+# Replynto: 
 **Enterprise-ready AI automation platform for email + task execution with approvals and audit trails.**
 
 ## 1️⃣ Product Overview
 
-MailMind is a multi-tenant B2B AI automation platform that:
+Replynto is a multi-tenant B2B AI automation platform that:
 - Connects to company Gmail accounts
 - Classifies incoming emails
 - Drafts intelligent replies
