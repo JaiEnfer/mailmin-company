@@ -129,11 +129,17 @@ If email_only:
 ## 5️⃣ Current Capabilities
 
 ✔ Multi-workspace support
+
 ✔ Configurable workspace behavior
+
 ✔ Intelligent meeting extraction
+
 ✔ Calendar creation
+
 ✔ Approval workflow
+
 ✔ Audit logging
+
 ✔ Production-ready architecture
 
 ---
